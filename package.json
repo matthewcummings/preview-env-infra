@@ -1,0 +1,8 @@
+{
+  "name": "preview-env-infra",
+  "private": true,
+  "description": "Pins the AWS CDK CLI for this repo. Run it with `npx cdk ...`.",
+  "devDependencies": {
+    "aws-cdk": "2.1143.0"
+  }
+}

@@ -1,0 +1,16 @@
+# Service registry (D25): the one list of services the platform knows about.
+# The reconciler checks each repo for preview branches; the CDK environment
+# construct deploys each service. Adding a service = one entry here.
+github_owner: CHANGE_ME  # overridable via env PE_GITHUB_OWNER
+
+services:
+  - name: service-a        # also the ECR repo name
+    repo: service-a        # GitHub repo name (owner is github_owner)
+    path_prefix: /a        # ALB routes /a and /a/* here
+    port: 8000
+    health_path: /healthz  # relative to path_prefix
+  - name: service-b
+    repo: service-b
+    path_prefix: /b
+    port: 8000
+    health_path: /healthz

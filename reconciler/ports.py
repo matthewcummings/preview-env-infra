@@ -1,0 +1,51 @@
+"""The small interfaces between the orchestration and the outside world (D8).
+
+Real adapters live in `reconciler.adapters`; tests pass in-memory fakes.
+"""
+
+from pathlib import Path
+from typing import Protocol
+
+from reconciler.core import Branch
+
+
+class ReconcileError(Exception):
+    """An expected failure with a message meant for humans (bad config, missing repo, ...)."""
+
+
+class BranchSource(Protocol):
+    def branches(self, repo: str, prefix: str) -> list[Branch]:
+        """Branches in `repo` whose name starts with `prefix` (a plain string prefix)."""
+        ...
+
+    def main_commits(self, repo: str, limit: int) -> list[str]:
+        """The newest `limit` commit SHAs on `main`, newest first."""
+        ...
+
+
+class ImageRegistry(Protocol):
+    def image_for(self, repository: str, sha: str) -> str | None:
+        """`<registry>/<repository>@sha256:...` for the image tagged `sha`, or None."""
+        ...
+
+
+class StackInventory(Protocol):
+    def env_stacks(self) -> dict[str, str]:
+        """Existing `pe-env-*` stacks as {env: status}. Deleted stacks are not included."""
+        ...
+
+    def outputs(self, env: str) -> dict[str, str]:
+        """The env stack's CloudFormation outputs (e.g. its URL), {} if none."""
+        ...
+
+
+class Deployer(Protocol):
+    def deploy(self, env: str, spec_path: Path) -> None:
+        """Create or update pe-env-<env> from the EnvSpec at `spec_path` (`cdk deploy`)."""
+        ...
+
+
+class StackDeleter(Protocol):
+    def delete(self, env: str) -> None:
+        """Delete pe-env-<env> and wait until it is gone (D35). Needs no EnvSpec."""
+        ...

@@ -1,0 +1,4 @@
+[tools]
+uv = "0.12.19"
+node = "24"
+aws-cli = "2"
