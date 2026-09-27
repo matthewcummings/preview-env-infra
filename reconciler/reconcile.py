@@ -15,6 +15,7 @@ from reconciler.core import (
     EnvPlan,
     ImageLookup,
     Plan,
+    UseBranch,
     desired_env,
     main_env,
     make_plan,
@@ -29,8 +30,8 @@ from reconciler.ports import (
 )
 from reconciler.registry import Registry
 
-# How far back to look for a main commit with an image (D26). The newest usually has one;
-# a few more cover a merge whose image is still building.
+# How far back to look for a built commit on main (D26), or on a preview branch (D24).
+# The newest usually has one; a few more cover a build that is still running.
 MAIN_LOOKBACK = 20
 
 
@@ -50,10 +51,19 @@ def build_plan(
         desired = desired_env(target.name, registry, list_branches(target.name, registry, github))
 
     main_commits = {}
+    branch_commits = {}
     if isinstance(desired, EnvPlan):
         main_commits = {
             s.name: github.main_commits(s.repo, MAIN_LOOKBACK) for s in registry.services
         }
+        # Each matched branch's recent commits, in case its head isn't built yet (D24).
+        # Only needed when images are checked; one GitHub call per branch in the group.
+        if images is not None:
+            branch_commits = {
+                s.name: github.branch_commits(s.repo, source.branch, MAIN_LOOKBACK)
+                for s in registry.services
+                if isinstance(source := desired.services[s.name], UseBranch)
+            }
 
     status = None
     if stacks is not None:
@@ -63,6 +73,7 @@ def build_plan(
         trigger=trigger,
         desired=desired,
         main_commits=main_commits,
+        branch_commits=branch_commits,
         image_for=_image_lookup(images),
         stack_status=status,
         stacks_checked=stacks is not None,
@@ -79,7 +90,7 @@ def _image_lookup(images: ImageRegistry | None) -> ImageLookup | None:
     if images is None:
         return None
     # The ECR repository is named after the service (contract "Images").
-    return lambda service, sha: images.image_for(service, sha)
+    return lambda service, tag: images.image_for(service, tag)
 
 
 def apply_plan(

@@ -47,7 +47,11 @@ class GitHubBranches:
         ]
 
     def main_commits(self, repo: str, limit: int) -> list[str]:
-        path = f"/repos/{self.owner}/{repo}/commits?sha=main&per_page={limit}"
+        return self.branch_commits(repo, "main", limit)
+
+    def branch_commits(self, repo: str, branch: str, limit: int) -> list[str]:
+        ref = urllib.parse.quote(branch, safe="")
+        path = f"/repos/{self.owner}/{repo}/commits?sha={ref}&per_page={limit}"
         return [commit["sha"] for commit in self._get(path, repo)]
 
     def _get(self, path: str, repo: str) -> Any:

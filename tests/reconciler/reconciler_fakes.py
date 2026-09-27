@@ -25,7 +25,9 @@ A_FEAT_2 = "af2af2a" + "f" * 33
 IMAGE_HOST = "123456789012.dkr.ecr.us-east-1.amazonaws.com"
 
 
-def image(service: str, sha: str) -> str:
+def image(service: str, tag: str) -> str:
+    """Fake digest-pinned URI. `<sha>` and `main-<sha>` tag the same build, so same digest."""
+    sha = tag.removeprefix("main-")
     return f"{IMAGE_HOST}/{service}@sha256:{sha[:7]}{'d' * 57}"
 
 
@@ -34,8 +36,10 @@ class FakeGitHub:
         self,
         branches: dict[str, list[Branch]] | None = None,
         main: dict[str, list[str]] | None = None,
+        history: dict[tuple[str, str], list[str]] | None = None,
     ) -> None:
         self._branches = branches or {}
+        self._history = history or {}  # (repo, branch) -> commits, newest first
         self._main = main or {"service-a": [A_MAIN], "service-b": [B_MAIN]}
         self.calls: list[tuple[str, str]] = []
 
@@ -48,15 +52,19 @@ class FakeGitHub:
         self.calls.append(("main_commits", repo))
         return self._main.get(repo, [])[:limit]
 
+    def branch_commits(self, repo: str, branch: str, limit: int) -> list[str]:
+        self.calls.append(("branch_commits", repo))
+        return self._history.get((repo, branch), [])[:limit]
+
 
 class FakeEcr:
     def __init__(self, built: set[tuple[str, str]] | None = None) -> None:
-        # Default: every commit has an image.
+        # (repository, tag) pairs that exist. Default: every tag has an image.
         self.built = built
 
-    def image_for(self, repository: str, sha: str) -> str | None:
-        if self.built is None or (repository, sha) in self.built:
-            return image(repository, sha)
+    def image_for(self, repository: str, tag: str) -> str | None:
+        if self.built is None or (repository, tag) in self.built:
+            return image(repository, tag)
         return None
 
 

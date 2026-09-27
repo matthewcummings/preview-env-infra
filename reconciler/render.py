@@ -69,7 +69,8 @@ def render_text(plan: Plan) -> str:
                 where = _runs(svc)  # main never looks for branches
             elif svc.matched is None:
                 where = f"none found -> {_runs(svc)}"
-            elif svc.fell_back:
+            elif svc.fell_back or svc.sha != svc.matched.sha:
+                # Runs something other than the branch head: main, or an older built commit.
                 where = f"{_found(svc)} -> {_runs(svc)}"
             else:
                 where = _found(svc)

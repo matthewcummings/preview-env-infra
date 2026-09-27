@@ -32,8 +32,17 @@ from reconciler.spec import ServiceSpec
 MAIN_COMMITS = {"service-a": [A_MAIN], "service-b": [B_MAIN]}
 
 
-def all_built(service, sha):
-    return image(service, sha)
+def all_built(service, tag):
+    return image(service, tag)
+
+
+def only(*tags):
+    """An image lookup where only these (service, tag) pairs exist."""
+    return lambda service, tag: image(service, tag) if (service, tag) in tags else None
+
+
+def main_tag(sha):
+    return f"main-{sha}"
 
 
 def branches(a=(), b=()):
@@ -176,22 +185,69 @@ def test_branch_with_image_is_pinned_by_digest():
     assert spec.services["service-b"] == ServiceSpec("main", B_MAIN, image("service-b", B_MAIN))
 
 
-def test_image_not_built_yet_falls_back_to_main_and_says_so():
-    plan = EnvPlan("c", {"service-a": UseMain(), "service-b": UseBranch("preview/c/s", B_FEAT)})
-    built = {("service-a", A_MAIN), ("service-b", B_MAIN)}  # B_FEAT still building
+B_FEAT_OLD = "bf0bf0b" + "e" * 33
+B_FEAT_OLDER = "bf9bf9b" + "e" * 33
 
+
+def test_branch_head_not_built_uses_the_newest_built_commit_on_the_branch():
+    # A quick second push: the new head is still building, but the previous push's image
+    # exists. Stay on the branch (its migrations may already be in the preview DB).
+    plan = EnvPlan("c", {"service-a": UseMain(), "service-b": UseBranch("preview/c/s", B_FEAT)})
     resolved = resolve_images(
         plan,
         main_commits=MAIN_COMMITS,
-        image_for=lambda s, sha: all_built(s, sha) if (s, sha) in built else None,
+        branch_commits={"service-b": [B_FEAT, B_FEAT_OLD, B_FEAT_OLDER]},
+        image_for=only(
+            ("service-a", main_tag(A_MAIN)),
+            ("service-b", B_FEAT_OLD),
+            ("service-b", B_FEAT_OLDER),
+            ("service-b", main_tag(B_MAIN)),
+        ),
+    )
+    b = resolved.services[1]
+    assert not b.fell_back
+    assert (b.ref, b.sha, b.image) == ("preview/c/s", B_FEAT_OLD, image("service-b", B_FEAT_OLD))
+    assert b.matched == UseBranch("preview/c/s", B_FEAT)
+    assert b.note == (
+        "head bf1bf1b not built yet -> using bf0bf0b, the newest built commit on this branch; "
+        "the env updates when the build finishes"
     )
 
+
+def test_branch_never_built_falls_back_to_main_and_says_so():
+    plan = EnvPlan("c", {"service-a": UseMain(), "service-b": UseBranch("preview/c/s", B_FEAT)})
+    resolved = resolve_images(
+        plan,
+        main_commits=MAIN_COMMITS,
+        branch_commits={"service-b": [B_FEAT, B_FEAT_OLD]},
+        image_for=only(("service-a", main_tag(A_MAIN)), ("service-b", main_tag(B_MAIN))),
+    )
     b = resolved.services[1]
     assert not resolved.errors
     assert b.fell_back
     assert (b.ref, b.sha, b.image) == ("main", B_MAIN, image("service-b", B_MAIN))
     assert b.matched == UseBranch("preview/c/s", B_FEAT)
-    assert "image for bf1bf1b not built yet -> using main @ b0b0b0b" in b.note
+    assert b.note == (
+        "no image yet for bf1bf1b or the branch's last 2 commit(s) -> using main @ b0b0b0b; "
+        "the env updates when the build finishes"
+    )
+
+
+def test_main_is_looked_up_by_its_main_tag_only():
+    # With merge commits, main's history contains feature-branch commits whose `<sha>` images
+    # were built from a preview branch. Only `main-<sha>` images count as main.
+    plan = EnvPlan("c", {"service-a": UseMain(), "service-b": UseMain()})
+    resolved = resolve_images(
+        plan,
+        main_commits={"service-a": [A_MAIN, A_MAIN_OLD], "service-b": [B_MAIN]},
+        image_for=only(
+            ("service-a", A_MAIN),  # a branch-built image of a commit that is now on main
+            ("service-a", main_tag(A_MAIN_OLD)),
+            ("service-b", main_tag(B_MAIN)),
+        ),
+    )
+    a = resolved.services[0]
+    assert (a.ref, a.sha) == ("main", A_MAIN_OLD)
 
 
 def test_main_uses_newest_commit_that_has_an_image():
@@ -201,7 +257,7 @@ def test_main_uses_newest_commit_that_has_an_image():
     resolved = resolve_images(
         plan,
         main_commits=commits,
-        image_for=lambda s, sha: None if sha == A_MAIN else image(s, sha),
+        image_for=lambda s, tag: None if tag == main_tag(A_MAIN) else image(s, tag),
     )
     a = resolved.services[0]
     assert (a.ref, a.sha) == ("main", A_MAIN_OLD)

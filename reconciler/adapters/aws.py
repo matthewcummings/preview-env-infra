@@ -40,16 +40,17 @@ LIVE_STACK_STATUSES = [
 
 
 class EcrImages:
-    """Image tag = full commit SHA (contract "Images"); resolved to a digest so CDK pins it."""
+    """Looks images up by tag (`<sha>`, or `main-<sha>` for main builds) and resolves the tag
+    to a digest, so CDK pins the exact image."""
 
     def __init__(self, client: Any, region: str) -> None:
         self.client = client
         self.region = region
 
-    def image_for(self, repository: str, sha: str) -> str | None:
+    def image_for(self, repository: str, tag: str) -> str | None:
         try:
             response = self.client.describe_images(
-                repositoryName=repository, imageIds=[{"imageTag": sha}]
+                repositoryName=repository, imageIds=[{"imageTag": tag}]
             )
         except ClientError as err:
             code = err.response.get("Error", {}).get("Code")

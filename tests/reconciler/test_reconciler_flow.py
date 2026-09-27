@@ -20,6 +20,7 @@ from reconciler.cli import Adapters, main
 from reconciler.core import Action, Branch
 from reconciler.ports import ReconcileError
 from reconciler.reconcile import apply_plan, build_plan
+from reconciler.render import render_text
 from reconciler.spec import EnvSpec, ServiceSpec
 
 
@@ -395,3 +396,34 @@ def test_cli_teardown_needs_a_group(registry_file):
     with pytest.raises(SystemExit) as exc:
         main(["teardown", "--env", "main", "--registry", str(registry_file)])
     assert exc.value.code == 2
+
+
+# --- Image fallback through build_plan (D24) ---------------------------------------------------
+
+
+def test_build_plan_uses_the_newest_built_branch_commit():
+    older = "af0af0a" + "e" * 33
+    github = FakeGitHub(
+        {"service-a": [Branch("preview/checkout/api", A_FEAT)]},
+        history={("service-a", "preview/checkout/api"): [A_FEAT, older]},
+    )
+    ecr = FakeEcr(
+        built={
+            ("service-a", older),
+            ("service-a", f"main-{A_MAIN}"),
+            ("service-b", f"main-{B_MAIN}"),
+        }
+    )
+    p = plan(Group("checkout"), github, ecr, FakeStacks({"checkout": "UPDATE_COMPLETE"}))
+    a = p.resolved.services[0]
+    assert (a.ref, a.sha) == ("preview/checkout/api", older)
+    assert ("branch_commits", "service-a") in github.calls
+    assert ("branch_commits", "service-b") not in github.calls  # b has no branch
+    text = render_text(p)
+    assert "preview/checkout/api @ af1af1a -> preview/checkout/api @ af0af0a" in text
+
+
+def test_no_aws_plan_skips_branch_history():
+    github = FakeGitHub({"service-a": [Branch("preview/checkout/api", A_FEAT)]})
+    plan(Group("checkout"), github)
+    assert not any(call == "branch_commits" for call, _ in github.calls)

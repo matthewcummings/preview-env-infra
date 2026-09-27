@@ -6,7 +6,7 @@
 
 The original take-home prompt is in [`prompt.md`](prompt.md).
 
-Per-branch **preview environments** on AWS for a team of containerized microservices, built with **AWS CDK (Python)**, ECS Fargate, Aurora Serverless v2 PostgreSQL and GitHub Actions.
+Per-branch **preview environments** on AWS for a team of containerized microservices, built with **AWS CDK (Python)**, ECS Fargate on Graviton (ARM64, about 20% cheaper than x86), Aurora Serverless v2 PostgreSQL and GitHub Actions.
 
 Push a `preview/<group>/...` branch to any service repo and you get an isolated, end-to-end copy of the system: every service, each with its own logical database (copied from `main`), behind one load balancer per preview environment. Services with a branch in that group run their branch; the rest run `main`. When a branch is merged or deleted, its service falls back to `main`; once no branches remain in the group, the environment tears itself down.
 
@@ -60,7 +60,7 @@ There are two kinds of CloudFormation stack:
 
 ```mermaid
 flowchart LR
-    dev[Developer pushes preview/checkout/api] --> sa[service-a CI<br/>test, build ARM64 image<br/>tagged with the commit SHA]
+    dev[Developer pushes preview/checkout/api] --> sa[service-a CI<br/>test, build Graviton ARM64 image<br/>tagged with the commit SHA]
     sa -->|push image| ecr[(ECR)]
     sa -->|repository_dispatch| rec[preview-env-infra<br/>reconcile workflow]
     rec -->|which repos have<br/>preview/checkout/*?| gh[(GitHub)]
@@ -81,7 +81,7 @@ flowchart LR
     b --> aurora
 ```
 
-1. **Service CI** (in each service repo): lint, tests, a migration check (fails if two merged branches each added a database migration, leaving two parallel migration histories), and a Docker build. On `main` or `preview/*`, it pushes an ARM64 image tagged with the full commit SHA and sends this repo an event (`repository_dispatch`). Deleting a `preview/*` branch also sends an event.
+1. **Service CI** (in each service repo): lint, tests, a migration check (fails if two merged branches each added a database migration, leaving two parallel migration histories), and a Docker build. On `main` or `preview/*`, it builds an ARM64 image on a native ARM runner and pushes it, tagged with the full commit SHA and sends this repo an event (`repository_dispatch`). Deleting a `preview/*` branch also sends an event.
 2. **The reconciler** (this repo, [`reconciler/`](reconciler/)) works out the environment from scratch on every run:
    - **Desired state** comes from GitHub: which registered repos have a branch in this group.
    - **Images** come from ECR, by commit SHA. A branch whose image isn't built yet runs `main` for now, and the plan says so.
@@ -168,7 +168,7 @@ make bootstrap
 
 Creates the standard resources CDK needs to deploy (an S3 bucket, an ECR repo, IAM roles). Harmless to rerun.
 
-### 6. Deploy the baseline (~15-20 minutes)
+### 6. Deploy the baseline (~10 minutes)
 
 ```bash
 make deploy-baseline ALLOW_MY_IP=1

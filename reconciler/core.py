@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from infra.config import ECR_MAIN_TAG_PREFIX  # the one definition of the main- tag
 from reconciler.branches import MAIN_BRANCH, PREVIEW_PREFIX, Group, parse_branch
 from reconciler.registry import Registry
 from reconciler.spec import EnvSpec, ServiceSpec
@@ -175,8 +176,18 @@ class ResolvedEnv:
         )
 
 
-# image_for(service, sha) -> image URI pinned by digest, or None if no image has that tag.
+# image_for(service, tag) -> image URI pinned by digest, or None if no image has that tag.
 type ImageLookup = Callable[[str, str], str | None]
+
+
+def main_image_tag(sha: str) -> str:
+    """The ECR tag of an image built from main: `main-<sha>`.
+
+    Branch images are tagged `<sha>` only; main builds get both. Looking main up by the
+    `main-` tag matters with merge commits: main's history also contains feature-branch
+    commits, whose `<sha>` images were built from preview branches, not from main.
+    """
+    return f"{ECR_MAIN_TAG_PREFIX}{sha}"
 
 
 def resolve_images(
@@ -184,18 +195,24 @@ def resolve_images(
     *,
     main_commits: Mapping[str, Sequence[str]],
     image_for: ImageLookup | None,
+    branch_commits: Mapping[str, Sequence[str]] | None = None,
 ) -> ResolvedEnv:
     """Pin every service to an exact SHA and image.
 
-    - `main` means the newest main commit that has an image (D26): right after a merge the
-      new main image may still be building, and the previous one keeps the env working.
-    - A branch whose SHA has no image yet runs that service's main image instead, and the
-      note says so (D24). The dispatch after its build finishes corrects the env.
+    - `main` means the newest main commit with a `main-<sha>` image (D26): right after a
+      merge the new main image may still be building, and the previous one keeps the env
+      working.
+    - A branch whose head has no image yet (its build is still running, D24) runs the newest
+      earlier commit of that same branch that has one, and the note says so. Staying on the
+      branch matters: the env's database may already hold the branch's migrations, which
+      main's code wouldn't know. The dispatch after the build finishes corrects the env.
+    - Only if none of the branch's recent commits has an image does it fall back to main.
     - `image_for=None` (no AWS): SHAs only; main = the head of main, no fallback checks.
 
-    `main_commits[service]` is newest first. Lookups are lazy: main is only checked for
-    services that need it.
+    `main_commits[service]` and `branch_commits[service]` (the matched branch's recent
+    commits) are newest first. Lookups are lazy: stop at the first image found.
     """
+    branch_commits = branch_commits or {}
     resolved: list[ResolvedService] = []
     errors: list[str] = []
     waiting: list[str] = []
@@ -206,9 +223,20 @@ def resolve_images(
                 if image_for is None:
                     resolved.append(ResolvedService(service, source, branch, sha, None))
                     continue
-                image = image_for(service, sha)
-                if image is not None:
-                    resolved.append(ResolvedService(service, source, branch, sha, image))
+                candidates = [sha, *(c for c in branch_commits.get(service, ()) if c != sha)]
+                built = _newest_branch_build(service, candidates, image_for)
+                if built is not None:
+                    built_sha, image = built
+                    note = None
+                    if built_sha != sha:
+                        note = (
+                            f"head {short(sha)} not built yet -> using {short(built_sha)}, the "
+                            "newest built commit on this branch; the env updates when the "
+                            "build finishes"
+                        )
+                    resolved.append(
+                        ResolvedService(service, source, branch, built_sha, image, note)
+                    )
                     continue
                 main = _newest_main_build(service, main_commits.get(service, ()), image_for)
                 if isinstance(main, NoImage):
@@ -221,8 +249,9 @@ def resolve_images(
                     continue
                 main_sha, main_image, main_note = main
                 note = (
-                    f"image for {short(sha)} not built yet -> using main @ {short(main_sha)}; "
-                    "the env updates when the build finishes"
+                    f"no image yet for {short(sha)} or the branch's last {len(candidates)} "
+                    f"commit(s) -> using main @ {short(main_sha)}; the env updates when the "
+                    "build finishes"
                 )
                 if main_note:
                     note += f" ({main_note})"
@@ -254,6 +283,17 @@ class NoImage:
     reason: str
 
 
+def _newest_branch_build(
+    service: str, commits: Sequence[str], image_for: ImageLookup
+) -> tuple[str, str] | None:
+    """(sha, image) for the newest of these branch commits with a `<sha>` image, or None."""
+    for sha in commits:
+        image = image_for(service, sha)
+        if image is not None:
+            return sha, image
+    return None
+
+
 def _newest_main_build(
     service: str, commits: Sequence[str], image_for: ImageLookup | None
 ) -> tuple[str, str | None, str | None] | NoImage | str:
@@ -264,7 +304,7 @@ def _newest_main_build(
     if image_for is None:
         return commits[0], None, None
     for index, sha in enumerate(commits):
-        image = image_for(service, sha)
+        image = image_for(service, main_image_tag(sha))
         if image is not None:
             note = None
             if index:
@@ -373,11 +413,17 @@ def make_plan(
     image_for: ImageLookup | None,
     stack_status: str | None,
     stacks_checked: bool,
+    branch_commits: Mapping[str, Sequence[str]] | None = None,
 ) -> Plan:
     """Combine the three steps into one Plan (still pure)."""
     resolved = None
     if isinstance(desired, EnvPlan):
-        resolved = resolve_images(desired, main_commits=main_commits, image_for=image_for)
+        resolved = resolve_images(
+            desired,
+            main_commits=main_commits,
+            image_for=image_for,
+            branch_commits=branch_commits,
+        )
     decision = None
     if stacks_checked and not isinstance(desired, Conflict):
         decision = decide_action(desired, stack_status)

@@ -62,8 +62,16 @@ jobs:
 
   apply:
     needs: plan
-    # Only when something would change (not for noop or ignored branches).
-    if: contains(fromJSON('["create", "update", "destroy", "delete-then-create"]'), needs.plan.outputs.action)
+    # The plan job ran OUTSIDE the env's queue, so its answer can be stale: e.g. a branch
+    # delete arriving while an earlier run is still creating the stack plans as `noop` (no
+    # stack yet), and skipping it would leave an env with no branches. So queue every run
+    # that might need to act, including noop and wait, and let the fresh plan inside the
+    # queue decide. Skipped: ignored branches, and refused/error/unknown (the plan job
+    # already failed or has nothing to act on). Later steps key off the apply step's own
+    # action, so a fresh noop/wait does nothing else.
+    if: >-
+      contains(fromJSON('["create", "update", "destroy", "delete-then-create", "noop", "wait"]'),
+      needs.plan.outputs.action)
     runs-on: ubuntu-24.04
     # One run per env at a time, across both service repos; at most one waits (D24).
     concurrency:

@@ -47,6 +47,15 @@ def test_github_branches_uses_matching_refs():
     assert request.get_header("Authorization") == "Bearer t0k"
 
 
+def test_github_branch_commits_quotes_the_branch_name():
+    opener = FakeOpener([{"sha": SHA}])
+    gh = GitHubBranches("acme", token="t", opener=opener)
+    assert gh.branch_commits("service-a", "preview/checkout/api", 20) == [SHA]
+    assert opener.requests[0].full_url.endswith(
+        "/repos/acme/service-a/commits?sha=preview%2Fcheckout%2Fapi&per_page=20"
+    )
+
+
 def test_github_main_commits():
     opener = FakeOpener([{"sha": SHA}, {"sha": "b" * 40}])
     gh = GitHubBranches("acme", token="", opener=opener)

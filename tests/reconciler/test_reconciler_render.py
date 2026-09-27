@@ -62,10 +62,13 @@ def test_text_image_fallback_is_flagged():
         },
     )
     text = render_text(
-        plan_for(both, image_for=lambda s, sha: None if sha == B_FEAT else image(s, sha))
+        plan_for(both, image_for=lambda s, tag: None if tag == B_FEAT else image(s, tag))
     )
     assert "  service-b  preview/checkout/schema @ bf1bf1b -> main @ b0b0b0b" in text
-    assert "! image for bf1bf1b not built yet -> using main @ b0b0b0b" in text
+    assert (
+        "! no image yet for bf1bf1b or the branch's last 1 commit(s) -> using main @ b0b0b0b"
+        in text
+    )
     assert "  Action: update - stack exists (UPDATE_COMPLETE)" in text
 
 

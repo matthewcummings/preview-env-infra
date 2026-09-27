@@ -82,8 +82,9 @@ class SharedStack(Stack):
                 empty_on_delete=True,
             )
             # Lifecycle (D11). Tags are commit SHAs, which can't tell main from preview
-            # images, so service CI tags main images twice: `<sha>` (what the reconciler
-            # resolves) and `main-<sha>` (what this policy matches).
+            # images, so service CI tags main images twice: `<sha>` (how the reconciler finds
+            # branch builds) and `main-<sha>` (how it finds main builds, and what this policy
+            # keeps).
             # ECR semantics: an image matched by a rule's tag filter can't be expired by a
             # later (higher-numbered) rule, so rule 1 protects the newest N main images and
             # rule 2 only ever expires previews, untagged manifests and old main images.
