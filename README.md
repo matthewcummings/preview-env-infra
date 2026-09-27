@@ -94,12 +94,39 @@ flowchart LR
 
 ## Deploy it yourself
 
-### Prerequisites
+### 1. Get the code
 
-- **OS:** macOS, Linux, or Windows via WSL2.
-- **Tools:** `make`, Docker, [uv](https://docs.astral.sh/uv/), Node.js 24, the AWS CLI v2, and the [GitHub CLI](https://cli.github.com/) (`gh`, logged in). Quick path: [`mise install`](https://mise.jdx.dev/) installs the pinned versions from `mise.toml`. Python 3.14 is installed by uv automatically.
-- **AWS:** credentials with admin rights for the first-time setup, and a region **chosen once** in your AWS config (`AWS_REGION` or your profile's `region`; `us-east-1` if unset). Everything else follows it.
-- **GitHub:** forks of all three repos under one owner. Set `PE_GITHUB_OWNER=<that owner>` in your shell (or edit `github_owner` in [`services.yaml`](services.yaml)).
+Fork all three repos ([preview-env-infra](https://github.com/matthewcummings/preview-env-infra), [service-a](https://github.com/matthewcummings/service-a), [service-b](https://github.com/matthewcummings/service-b)) into the **same** GitHub account or organization: the reconciler finds the service repos under one owner. Then clone them side by side:
+
+```bash
+mkdir preview-envs && cd preview-envs
+for repo in preview-env-infra service-a service-b; do gh repo clone <your-github-owner>/$repo; done
+cd preview-env-infra
+```
+
+Every command from here on runs in `preview-env-infra`.
+
+### 2. Install the tools
+
+Supported: macOS, Linux, or Windows via WSL2.
+
+**The quick way:** install [mise](https://mise.jdx.dev/), then run `mise install` in `preview-env-infra`. It installs the pinned uv, Node.js, AWS CLI and GitHub CLI from `mise.toml`. uv then installs Python 3.14 and every Python dependency by itself the first time you run anything.
+
+**Or install these yourself:**
+
+| Tool | Version | Why |
+|---|---|---|
+| [uv](https://docs.astral.sh/uv/) | 0.12+ | Python 3.14 and all Python dependencies |
+| Node.js | 24 | Runs the pinned CDK CLI (`npx cdk`) |
+| AWS CLI | v2 | Credentials and region |
+| [GitHub CLI](https://cli.github.com/) (`gh`) | 2+, logged in | Cloning, and setting the repos' GitHub Actions variables (`make setup-github`) |
+
+**Either way, you also need `make`** (macOS: Xcode Command Line Tools; Ubuntu/WSL: `sudo apt install make`). Docker is only needed to run the service repos' tests, not to deploy: CI builds the images.
+
+### 3. Point it at your accounts
+
+- **AWS:** credentials for an IAM identity with admin rights (only the first-time setup needs them; CI never uses them), and a region **chosen once** in your AWS config (`AWS_REGION` or your profile's `region`; `us-east-1` if unset). Everything else follows it.
+- **GitHub owner:** in your fork of `preview-env-infra`, set `github_owner` in [`services.yaml`](services.yaml) to the account that owns your forks. (Or export `PE_GITHUB_OWNER=<owner>` in each shell.)
 
 ### First-time setup
 
