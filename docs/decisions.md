@@ -8,12 +8,13 @@ This repo builds per-branch preview environments for two containerized FastAPI +
 - **A stateless reconciler decides what each env runs.** Desired state is read live from GitHub (which branches exist), actual state from CloudFormation (which env stacks exist). There is no state file or database to drift. Every event just means "go look again" (D8, D26).
 - **Compute is ECS Fargate (ARM64) behind one ALB per env**, in private subnets, with the ALBs IP-allowlisted through a managed prefix list (D5, D9, D10, D42).
 - **Data: one shared Aurora Serverless v2 Postgres cluster, a logical database per service, and per env.** Each preview gets its own databases on main's cluster, copied from main on first start and kept across pushes. Every login uses IAM database auth, so there are no DB passwords in the apps (D12, D16, D40, D41).
-- **CI/CD is GitHub Actions + OIDC.** Service repos test, build an image tagged with the commit SHA and signal the infra repo. Only the infra repo deploys, through CDK, with one queue per env (D11, D24, D32).
-- **Scope:** the prompt's scenarios, teardown, the database copy and the plumbing around them are built. Sweeps, caps, production and a few conveniences are documented as next steps (D29).
+- **CI/CD is GitHub Actions + OIDC.** Service repos test, build an image tagged with the commit SHA and signal the infra repo. Only the infra repo deploys, through CDK, with one queue per env, and it posts the env's URL on the group's open PRs (D11, D24, D32, D44).
+- **Two kinds of stack:** `preview-baseline` (VPC, ECS cluster, ECR, Aurora, OIDC roles; deployed once) and `preview-env-<name>` (one per env, including `preview-env-main`). The different prefixes are deliberate (D43).
+- **Scope:** the prompt's scenarios, teardown, the database copy, PR comments, setup tooling (`make doctor`, `make deploy-baseline`, `make setup-github`) and the plumbing around them are built. Sweeps, caps, production and a few conveniences are documented as next steps (D29).
 
 ## How to read this
 
-- Decisions are grouped by topic, not in the order I made them. The IDs (D1-D42) are stable because code comments refer to them (for example `# D40` in `infra/database.py`).
+- Decisions are grouped by topic, not in the order I made them. The IDs (D1-D46) are stable because code comments refer to them (for example `# D40` in `infra/database.py`).
 - Each entry gives what I chose, what else I considered, why, and the consequences or limits.
 - Where I changed my mind, only the final decision is shown, with a one-line **Revised:** note saying what changed and why. Rejected alternatives are kept briefly, because they explain the choice.
 - **Status** in the index: **Built** (in the code), **Partly built** (core built, some pieces documented), **Documented only** (a design, not code), **Principle** (a guideline that shaped the rest).
@@ -64,6 +65,10 @@ This repo builds per-branch preview environments for two containerized FastAPI +
 | D40 | Preview DBs live on main's Aurora cluster | [Interpreting the prompt](#interpreting-the-prompt) | Built |
 | D41 | Keep one shared cluster; document the scaling path | [Interpreting the prompt](#interpreting-the-prompt) | Built (scaling path documented) |
 | D42 | IP allowlisting on every ALB via a managed prefix list | [Compute and networking](#compute-and-networking) | Built |
+| D43 | Stack naming: `preview-baseline` + `preview-env-<name>` | [CI/CD and security](#cicd-and-security) | Built |
+| D44 | Preview URL as a sticky PR comment; two narrow GitHub tokens | [CI/CD and security](#cicd-and-security) | Built |
+| D45 | No image yet: wait, don't fail | [Reliability](#reliability) | Built |
+| D46 | `make doctor`: a preflight checklist | [Reviewer experience](#reviewer-experience) | Built |
 
 ---
 
@@ -165,7 +170,7 @@ The core of the take-home: deciding which branches of which services run togethe
 ### D36. Strict group names, no silent conversion
 
 - **Chose:** Group names must be lowercase letters, digits and hyphens, 1-20 characters, not starting or ending with a hyphen, and not `main`. Anything else is rejected with a clear message and a suggested rename. Names are never converted.
-- **Why:** Converting (`Checkout` -> `checkout`, `cart_api` -> `cart-api`) could merge two different branch names into one group without anyone meaning it, which is exactly the accidental grouping D7 is designed against. The 20-character cap exists because group names end up in AWS resource names (ALB and target group names max out at 32).
+- **Why:** Lowercase only means there is no ambiguity between look-alikes such as `Checkout` and `checkout`. Converting (`Checkout` -> `checkout`, `cart_api` -> `cart-api`) could merge two different branch names into one group without anyone meaning it, which is exactly the accidental grouping D7 is designed against. The 20-character cap exists because group names end up in AWS resource names (ALB and target group names max out at 32).
 - **Considered:** Truncating long names with a hash suffix (my first idea, in D14). Rejecting is simpler and more predictable.
 
 ### D8. A stateless reconciler decides what each env runs
@@ -195,7 +200,7 @@ The core of the take-home: deciding which branches of which services run togethe
 - **Why:** It matches the prompt ("when a feature branch is pushed"), lets developers test end to end before asking for review, keeps groups across repos simple, and is git-native.
 - **Considered, PR-triggered:** Contradicts "pushed", needs draft PRs to test before review, makes cross-repo groups awkward (A has a PR, B only a branch), needs two teardown triggers that must agree, and invites a known security trap (`pull_request_target` running fork code with your cloud credentials).
 - **Also rejected:** Treating "the branch's latest commit is already in `main`" as "merged". A brand-new branch with no commits looks identical, so it would never get an env. Auto-deleting branches on merge (D7) is the simpler answer.
-- **Nice-to-have (TODO):** Comment the env URL on the PR when one exists.
+- **PRs still get the URL:** Envs don't depend on PRs, but when a PR is open from a branch in the group, the reconcile run comments the env's URL on it (D44).
 
 ### D24. Race conditions: one stack per group + queued deploys
 
@@ -203,14 +208,14 @@ The core of the take-home: deciding which branches of which services run togethe
 - **Layer 1, one stack name per group:** Group `checkout` is always stack `preview-env-checkout`. A second deploy can't create a second stack; at worst CloudFormation refuses because the stack is busy.
 - **Layer 2, queued deploys:** The infra repo's workflow uses a GitHub Actions `concurrency` group per env with `cancel-in-progress: false`: at most one run in progress and one waiting per env. Both service repos dispatch to the infra repo, so this serializes across repos.
 - **Why dropping queued runs is safe:** GitHub keeps only the newest waiting run and cancels older waiting ones. That is only safe because every run recomputes the full desired state from the current branches (D8). A skipped run loses nothing. It also bounds the work per env however fast automation pushes.
-- **Image not built yet:** If B's branch exists but its image isn't in ECR yet, the env runs B's `main` for now and the plan says so. B's dispatch after its build corrects it.
+- **Image not built yet:** If B's branch exists but its image isn't in ECR yet, the env runs B's `main` for now and the plan says so. B's dispatch after its build corrects it. If there's no `main` image either, the run waits instead of failing (D45).
 - **Shared infra:** Previews only read shared resources. The shared stack publishes its values in SSM Parameter Store, not CloudFormation exports: an export can't change while another stack imports it, which would freeze the shared stack, and SSM keeps `cdk synth` credential-free.
 - **Checked and fine:** A preview copying `main` mid-migration sees either the old or the new schema, never half of it (`pg_dump` reads one consistent snapshot; migrations are transactional).
 - **Not built (D29):** A cap on the number of concurrent previews (so automation creating 80 branches can't hit the ALB quota and run up costs), and routing "reconcile everything" runs through the per-env queues (one matrix job per group). The second is only needed once something reconciles everything (D21, D26).
 
 ### D25. Service registry: nothing hardcodes "A and B"
 
-- **Chose:** `services.yaml` lists each service: name, repo, path prefix, port, health path. The CDK environment construct and the reconciler both loop over it. The GitHub owner is one setting (overridable with `PREVIEW_ENV_GITHUB_OWNER`), so a fork needs no edits.
+- **Chose:** `services.yaml` lists each service: name, repo, path prefix, port, health path. The CDK environment construct and the reconciler both loop over it. The GitHub owner is one setting (`github_owner`, overridable with `PREVIEW_ENV_GITHUB_OWNER`). In CI it comes from the repo's own owner, so a fork's workflows need no edits.
 - **Why:** Adding a service is a data change: one registry entry plus that repo's CI workflow. It is the right shape for the "35 services" discussion. Works on a personal GitHub account, no org needed: all deploys run in the infra repo, and service repos only dispatch.
 
 ---
@@ -254,6 +259,7 @@ The core of the take-home: deciding which branches of which services run togethe
   - A NAT instance (e.g. fck-nat): ~$3/month.
   - One NAT per AZ: the production setup. A single NAT means an AZ failure cuts off outbound traffic, which is acceptable for dev.
 - **Limits:** No API authentication and HTTP only (TLS needs a domain). Ingress is restricted by D42 instead.
+- **Revised:** I first planned an `allowed_ingress_cidrs` parameter on each ALB's security group (open by default, a TODO to narrow). D42 replaced it with a shared prefix list that is closed by default and built.
 
 ### D10. Ingress: one ALB per env, path-routed
 
@@ -267,7 +273,7 @@ The core of the take-home: deciding which branches of which services run togethe
 
 - **Chose:** `preview-baseline` creates one customer-managed prefix list (`preview-baseline-alb-allowlist`) and publishes its ID to SSM. Every env's ALB security group accepts HTTP only from that list. No security group anywhere allows `0.0.0.0/0`.
   - Changing the list updates every env at once, with no redeploy.
-  - **Entries stay out of CloudFormation and out of the repo.** The stack creates the list with no entries, so deploys never reset them and no IP is ever committed. `scripts/allow_ip.py add|remove|list` manages entries (default: the caller's public IP as a /32).
+  - **Entries stay out of CloudFormation and out of the repo.** The stack creates the list with no entries, so deploys never reset them and no IP is ever committed. `make allow-ip` / `make disallow-ip` / `make list-ips` (`scripts/allow_ip.py`) manage entries (default: the caller's public IP as a /32, or `CIDR=...`). `make deploy-baseline ALLOW_MY_IP=1` adds the deployer's IP on first setup.
   - **Secure by default:** nothing is reachable until someone deliberately adds an IP.
   - CI adds its runner's IP for the smoke test (D34) and always removes it afterwards, even on failure.
 - **Why:** There is no API auth (D9), and a publicly writable CRUD endpoint on the internet is wrong even for a demo. A prefix list is free, AWS-native and central.
@@ -335,7 +341,7 @@ The preview half of this decision was revised by D40 (where the database lives).
   - **The infra repo** runs the reconciler for every env, including `main`: one deployer for everything. Images are resolved from commit SHA to ECR digest before deploying, never looked up by branch name.
 - **Least privilege:** Each service repo's OIDC role can only push to its own ECR repository. Only the infra repo's role can deploy. A compromised service repo can't touch infra.
 - **ECR lifecycle:** Keep the last 20 `main` images; expire other images after 14 days. Consequence: a preview older than that whose task gets replaced can't pull its image. Consistent with "branches shouldn't live that long"; a re-push fixes it.
-- **The one real secret** is the token that lets service repos dispatch to the infra repo (a fine-grained token or a GitHub App). Everything AWS-side uses OIDC.
+- **The only secrets are two narrow GitHub tokens** (D44): one lets service repos signal the infra repo, one lets the infra repo comment on service-repo PRs. Everything AWS-side uses OIDC. Without the dispatch token, service CI still publishes the image and skips the signal with a notice; `make preview BRANCH=...` deploys by hand.
 - **Considered:** CodePipeline/CodeBuild; reusable workflows called from each service repo (concurrency groups can't span repos, which D24 relies on).
 - **Why:** No long-lived AWS credentials anywhere, deploys to one env serialized across repos, and deterministic deploys by digest.
 
@@ -357,13 +363,43 @@ The preview half of this decision was revised by D40 (where the database lives).
 
 ### D39. Reuse an existing GitHub OIDC provider
 
-- **Chose:** An AWS account can have only one GitHub OIDC provider. The deploy script checks IAM for one; if found, it passes a CDK context flag so `preview-baseline` reuses it (its ARN is predictable). Otherwise `preview-baseline` creates it.
+- **Chose:** An AWS account can have only one GitHub OIDC provider. `make deploy-baseline` (`scripts/deploy_baseline.py`) decides, then passes a CDK context flag (`-c githubOidcProvider=existing`) so `preview-baseline` imports the provider instead of creating it (its ARN is predictable):
+  - First deploy: reuse the account's provider if one exists, else create it.
+  - Later deploys: keep whatever the stack did the first time, read from the stack's own resources. Switching modes on an existing stack would delete the provider or fail on a duplicate. This path needs only CloudFormation reads, so the CI role never needs IAM read access.
 - **Why in the script, not CDK:** Checking the account at synth time would break credential-free `cdk synth` (D1). Running `cdk deploy` directly without the script gives CloudFormation's unclear "already exists" error, so the flag is documented.
 
 ### D35. Teardown deletes the CloudFormation stack directly
 
 - **Chose:** The reconciler tears down with CloudFormation `DeleteStack` and waits, not `cdk destroy`. It retries once on `DELETE_FAILED`.
 - **Why:** `cdk destroy` has to synthesize the app to find the stack, and an env stack can only be synthesized from a full spec with resolved images. Teardown would then fail if an image lookup failed, and teardown is the one operation that must always work. `DeleteStack` needs no images, no synth and no Node. It's what `cdk destroy` calls underneath anyway.
+- **Also by hand:** `make teardown GROUP=<group>` deletes a preview's stack the same way, even if its branches still exist (for a missed delete event; the next push would recreate it). It refuses `main`.
+- **Scoped by name:** The CI role may call `DeleteStack` only on `preview-env-*` stacks, which by construction never includes the baseline (D43).
+
+### D43. Stack naming: `preview-baseline` + `preview-env-<name>`
+
+- **Chose:**
+  - Baseline stack `preview-baseline`, with its SSM parameters under `/preview-baseline/...` and the prefix list `preview-baseline-alb-allowlist`.
+  - Env stacks `preview-env-<name>`: `preview-env-main`, `preview-env-checkout`.
+- **Why the baseline is outside the `preview-env-` prefix:** Everything that matches env stacks by prefix must never match the baseline: the reconciler's list of envs, the CI role's `DeleteStack` permission on `preview-env-*`, and a hypothetical group named `shared` or `baseline`. Separate prefixes make that true by construction, with no reserved names or IAM deny rules to keep in sync.
+- **Why "baseline":** It's the prompt's own term ("Defines baseline infrastructure") and says what the stack is.
+- **Revised:** The first names used a short `pe-` prefix (`pe-shared`, `pe-env-*`), which nobody could decode.
+- **Considered:** `preview-env-shared` (collides with the env prefix), `preview-shared-infra` (one word away from the repo name), `preview-shared` (says who uses it, not what it is), `preview-platform` (vague).
+- **Limits:** Stack names allow 128 characters; the longest here is `preview-env-` plus a 20-character group. Other resource names are generated by CDK.
+
+### D44. Preview URL as a sticky PR comment; two narrow GitHub tokens
+
+- **Chose:** After each deploy, the infra repo's reconcile workflow (`scripts/pr_comment.py`) finds open service-repo PRs whose branch is in the group and keeps **one** comment per PR up to date (found by a hidden marker, edited on each deploy): the env URL, each service's branch and SHA, the smoke-test result, and a link to the run. On teardown, it edits existing comments to say the env was removed, and never adds new ones to old PRs.
+- **Comments never fail a deploy:** no token -> a notice and skip; GitHub errors -> a warning and exit 0; the step is also `continue-on-error`. It runs even after a failed smoke test, so the PR shows that too.
+- **Two fine-grained tokens, each for one job:**
+
+  | Token | Scope | Permission | Stored in |
+  |---|---|---|---|
+  | `INFRA_DISPATCH_TOKEN` | `preview-env-infra` only | Contents: read and write (needed for `repository_dispatch`) | the service repos |
+  | `PREVIEW_COMMENT_TOKEN` | `service-a`, `service-b` only | Pull requests: read and write | the infra repo |
+
+- **Why two:** A fine-grained token grants the same permissions on every repo it selects. One combined token would need Contents write on all three repos, so it could push code to any of them. Neither of these can.
+- **Long term:** A GitHub App: one installable identity with per-repo permissions and no personal tokens.
+- **Without tokens,** everything still works by hand: `make preview BRANCH=...` deploys, and CI skips the signal or comment with a notice.
 
 ---
 
@@ -379,6 +415,8 @@ The preview half of this decision was revised by D40 (where the database lives).
   - Group names validated up front (D36), so names always fit AWS limits.
   - One queue per env (D24).
   - Config validated at app startup (for example, IAM auth requires a region and SSL).
+  - Conflicts and blocked stacks fail the read-only `plan` job with the reason in the job summary; nothing is applied.
+  - A preflight check for whoever deploys (`make doctor`, D46).
 - **Skipped (production list):** custom retry frameworks, Step Functions orchestration, drift detection.
 - **Rejected:** A switch between two database strategies. It would double what has to be built and tested.
 
@@ -402,7 +440,14 @@ The preview half of this decision was revised by D40 (where the database lives).
   - A write/read/delete round trip on `/items`.
   - Isolation: an item created in the preview doesn't appear in `main`.
 - **Why:** It turns "functional end to end" from a claim into something CI checks every run, with public logs as evidence.
+- **How CI reaches the env:** The ALBs are allowlisted (D42), so the job adds its runner's IP, runs the test, and always removes the IP. `make smoke ENV=<env>` runs the same test from a laptop.
 - **Downstream (documented):** Integration and load testing (pytest, k6, Locust) belong to the teams using the previews. The deploy job publishes the env URL as a job output so their tests can run against it.
+
+### D45. No image yet: wait, don't fail
+
+- **Chose:** If a service has no usable image at all (no image for its branch's commit and no built `main` image either, e.g. during first-time setup before CI has built anything), the reconciler plans `wait`, says which services it is waiting for, and exits cleanly. Nothing is deployed. The signal from the build that is still running triggers the next run, which deploys.
+- **Why:** On a fresh setup both service repos build at the same time, and whichever finishes first would otherwise produce a red run for a state that fixes itself minutes later. A red run should mean something needs a human.
+- **Related:** A branch whose own image isn't built yet, but that has a `main` image, runs `main` for now instead of waiting (D24).
 
 ---
 
@@ -410,17 +455,16 @@ The preview half of this decision was revised by D40 (where the database lives).
 
 ### D29. Build the must-haves; document the rest
 
-- **Built:** The prompt's four scenarios end to end, teardown, the per-env database copy, IP allowlisting, the plan output, the smoke test, and tests for the reconciler core and the CDK templates.
+- **Built:** The prompt's four scenarios end to end, teardown (automatic and `make teardown`), the per-env database copy, IP allowlisting (D42, which supersedes the `allowed_ingress_cidrs` TODO from D9), the plan output, the smoke test, PR comments with the env URL (D44), the setup tooling (`make doctor`, `make deploy-baseline`, `make setup-github`), and tests for the reconciler core, the CDK templates and the scripts.
 - **Documented TODOs:**
 
   | TODO | From | Consequence until built |
   |---|---|---|
-  | Nightly "reconcile all" sweep + age limit | D21 | Cleanup relies on branch-deletion events; a missed event leaves an env running until deleted by hand. |
+  | Nightly "reconcile all" sweep + age limit | D21 | Cleanup relies on branch-deletion events; a missed event leaves an env running until someone runs `make teardown GROUP=...`. |
   | Reconcile every env when `main` moves | D26 | Previews pick up newer `main` images on the next push to their group. |
   | Per-group jobs for reconcile-everything runs | D24 | Not needed until something reconciles everything. |
   | Cap on concurrent previews | D24 | Many `preview/*` branches at once could hit the ALB quota. |
   | Stale-branch warning in the plan output | D7 | Relies on "auto-delete head branches" being on. |
-  | PR comment with the env URL | D7, D23 | The URL is in the job summary and job output. |
   | `cdk diff` on infra PRs | D38 | Reviewers read the synth output instead. |
   | CloudWatch alarms on the shared cluster | D40 | A cluster problem is noticed by its users. |
   | "Reset preview data" workflow | D40 | Delete and re-push the branch. |
@@ -461,7 +505,7 @@ The preview half of this decision was revised by D40 (where the database lives).
 
 - **Chose:** Three levels of review, each standing on its own:
   - **Read and watch:** the README, this document, the video and the public CI runs.
-  - **Run locally, no AWS:** `uv run pytest`, the reconciler's `plan --no-aws`, and `cdk synth` (credential-free, because shared values come from SSM at deploy time, D24).
+  - **Run locally, no AWS:** `make test`, `make plan NO_AWS=1` (the reconciler's decisions, reading only GitHub), and `make synth` (credential-free, because shared values come from SSM at deploy time, D24).
   - **Deploy to your own AWS account** (D20).
 - **Why:** Most reviewers will read and watch. Everything checkable without AWS makes the submission more credible.
 
@@ -477,8 +521,18 @@ The preview half of this decision was revised by D40 (where the database lives).
 
 ### D20. Bring your own AWS account
 
-- **Chose:** Nothing account-specific in code. The account comes from the deployer's credentials; the region is a parameter, defaulting to `us-east-1`. The GitHub owner comes from the CI context (D25), so a fork works unchanged.
+- **Chose:** Nothing account-specific in code. The account comes from the deployer's credentials; the region is a parameter, defaulting to `us-east-1`. The GitHub owner is one setting in `services.yaml` (or `PREVIEW_ENV_GITHUB_OWNER`), and CI takes it from the repo's owner (D25).
 - **Assumption:** Whoever deploys manages their own credentials and has admin rights for first-time setup (D32).
+
+### D46. `make doctor`: a preflight checklist
+
+- **Chose:** A read-only checklist (`scripts/doctor.py`) with four levels, rerunnable at any time:
+  - **PASS**.
+  - **WARN:** works, or a later setup step just hasn't run yet (CDK not bootstrapped, GitHub variables or secrets not set, auto-delete head branches off).
+  - **FAIL:** a real problem to fix first (a required tool or `gh` login missing, a repo missing, a token lacking the permission it needs, bad AWS credentials). Exit code 1 only on FAIL.
+  - **SKIP:** not checked (e.g. a token that isn't set locally).
+- **What it checks:** tools (Docker is optional: only the service repos' tests need it), AWS credentials and region, CDK bootstrap, the GitHub owner, each repo's existence, Actions variables and secrets, "Automatically delete head branches", and whether each token can reach its repos. The dispatch-token check sends a `repository_dispatch` of a type no workflow listens for, so it proves the permission without starting a run.
+- **Why:** Setup crosses AWS, GitHub and local tooling, and most failures there are silent until a deploy half-works. Separating "not done yet" from "broken" means a fresh setup doesn't look like a wall of errors.
 
 ### D27. Naming: "preview environments"
 

@@ -34,7 +34,7 @@ A and B are service-a and service-b. The same rules apply to any number of servi
 - Branches without the `preview/` prefix get no environment, loudly: CI explains why and how to rename the branch.
 
 **Where to look next:**
-- [`docs/decisions.md`](docs/decisions.md): every design decision (D1-D42), what I considered and why. Code comments cite these IDs.
+- [`docs/decisions.md`](docs/decisions.md): every design decision (D1-D46), what I considered and why. Code comments cite these IDs.
 - [How it works](#how-it-works) below, then the code: [`reconciler/core.py`](reconciler/core.py) is the heart of it.
 
 **CI:** every push runs the tests, lint and `cdk synth` in GitHub Actions ([infra](https://github.com/matthewcummings/preview-env-infra/actions), [service-a](https://github.com/matthewcummings/service-a/actions), [service-b](https://github.com/matthewcummings/service-b/actions)), and every deploy smoke-tests the live environment.
