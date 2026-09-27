@@ -126,7 +126,7 @@ Supported: macOS, Linux, or Windows via WSL2.
 ### 3. Set up AWS access and your GitHub owner
 
 - **AWS:** your terminal needs credentials for an IAM identity with admin rights. Only this first-time setup uses them; CI never does. Choose your region **once** in your AWS config (`AWS_REGION` or your profile's `region`; `us-east-1` if unset), and everything else follows it.
-- **GitHub owner:** in your fork of `preview-env-infra`, set `github_owner` in [`services.yaml`](services.yaml) to the account that owns your forks. (Alternatively, set the `PREVIEW_ENV_GITHUB_OWNER` environment variable.)
+- **GitHub owner:** in your fork of `preview-env-infra`, set `github_owner` in [`services.yaml`](services.yaml) to the owner of your forks: your GitHub organization, or for personal forks, your GitHub username. (Alternatively, set the `PREVIEW_ENV_GITHUB_OWNER` environment variable.)
 
 ### First-time setup
 
