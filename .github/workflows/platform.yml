@@ -104,14 +104,18 @@ jobs:
 
       # The ALBs only accept allowlisted IPs (D42): let this runner in for the smoke test,
       # and always take it out again, even if the smoke test fails.
+      # Only when something was actually deployed: a `wait` (images not built yet) or `noop`
+      # has nothing to smoke-test.
       - name: Allow this runner's IP
         id: runner-ip
+        if: contains(fromJSON('["create", "update", "delete-then-create"]'), steps.apply.outputs.action)
         run: |
           ip="$(curl -fsS https://checkip.amazonaws.com)"
           echo "cidr=${ip}/32" >> "$GITHUB_OUTPUT"
           uv run python scripts/allow_ip.py add --cidr "${ip}/32"
 
       - name: Smoke test main
+        if: contains(fromJSON('["create", "update", "delete-then-create"]'), steps.apply.outputs.action)
         run: uv run python scripts/smoke_test.py main --spec envspec.json
 
       - name: Remove this runner's IP
