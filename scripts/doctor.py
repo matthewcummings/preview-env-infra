@@ -100,7 +100,8 @@ def check_github_owner(registry_path: Path) -> Result:
             f"github_owner is still {PLACEHOLDER_OWNER}",
             "export PREVIEW_ENV_GITHUB_OWNER=<your GitHub user or org>, or edit services.yaml",
         )
-    source = "PREVIEW_ENV_GITHUB_OWNER" if os.environ.get("PREVIEW_ENV_GITHUB_OWNER") else "services.yaml"
+    env_var = "PREVIEW_ENV_GITHUB_OWNER"
+    source = env_var if os.environ.get(env_var) else "services.yaml"
     return Result(True, "GitHub owner", f"{owner} (from {source})")
 
 

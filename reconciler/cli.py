@@ -142,7 +142,8 @@ def main(argv: Sequence[str] | None = None, *, adapters: AdapterFactory = real_a
         if registry.github_owner == PLACEHOLDER_OWNER:
             raise ReconcileError(
                 f"github_owner is still '{PLACEHOLDER_OWNER}' in {args.registry}. Set it to the "
-                "GitHub user or org that owns the service repos, or export PREVIEW_ENV_GITHUB_OWNER."
+                "GitHub user or org that owns the service repos, or export "
+                "PREVIEW_ENV_GITHUB_OWNER."
             )
         deps = adapters(registry, not args.no_aws)
         if args.command == "teardown":
