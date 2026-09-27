@@ -81,7 +81,7 @@ def _explain_http_error(err: urllib.error.HTTPError, repo: str, *, authenticated
     if err.code == 404:
         hint = (
             "the repo does not exist or is not visible to this token. Check github_owner in "
-            "services.yaml (or PE_GITHUB_OWNER) and the repo names"
+            "services.yaml (or PREVIEW_ENV_GITHUB_OWNER) and the repo names"
         )
         if not authenticated:
             hint += "; private repos need GITHUB_TOKEN"

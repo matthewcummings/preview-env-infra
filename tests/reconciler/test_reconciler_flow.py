@@ -223,7 +223,7 @@ def test_cli_apply_rejects_no_aws(registry_file):
 
 
 def test_cli_placeholder_owner_is_a_clear_error(tmp_path, capsys, monkeypatch):
-    monkeypatch.delenv("PE_GITHUB_OWNER", raising=False)
+    monkeypatch.delenv("PREVIEW_ENV_GITHUB_OWNER", raising=False)
     path = tmp_path / "services.yaml"
     path.write_text("github_owner: CHANGE_ME\nservices: []\n")
     code = main(["plan", "--env", "main", "--no-aws", "--registry", str(path)])

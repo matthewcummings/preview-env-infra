@@ -36,7 +36,7 @@ def run(
     status="UPDATE_COMPLETE",
     region="us-east-1",
 ):
-    monkeypatch.delenv("PE_GITHUB_OWNER", raising=False)
+    monkeypatch.delenv("PREVIEW_ENV_GITHUB_OWNER", raising=False)
     sts, cfn = client("sts"), client("cloudformation")
     with Stubber(sts) as sts_stub, Stubber(cfn) as cfn_stub:
         aws_ok(sts_stub, cfn_stub, status)
@@ -65,7 +65,7 @@ def test_missing_tool_fails_with_install_hint(tmp_path, monkeypatch, capsys):
 
 def test_placeholder_owner_fails(tmp_path, monkeypatch, capsys):
     assert run(tmp_path, monkeypatch, owner="CHANGE_ME") == 1
-    assert "export PE_GITHUB_OWNER" in capsys.readouterr().out
+    assert "export PREVIEW_ENV_GITHUB_OWNER" in capsys.readouterr().out
 
 
 def test_region_unset_is_only_a_warning(tmp_path, monkeypatch, capsys):
@@ -74,7 +74,7 @@ def test_region_unset_is_only_a_warning(tmp_path, monkeypatch, capsys):
 
 
 def test_not_bootstrapped(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("PE_GITHUB_OWNER", raising=False)
+    monkeypatch.delenv("PREVIEW_ENV_GITHUB_OWNER", raising=False)
     sts, cfn = client("sts"), client("cloudformation")
     with Stubber(sts) as sts_stub, Stubber(cfn) as cfn_stub:
         sts_stub.add_response(
@@ -94,7 +94,7 @@ def test_not_bootstrapped(tmp_path, monkeypatch, capsys):
 
 
 def test_bad_credentials_skip_the_bootstrap_check(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("PE_GITHUB_OWNER", raising=False)
+    monkeypatch.delenv("PREVIEW_ENV_GITHUB_OWNER", raising=False)
     sts = client("sts")
     with Stubber(sts) as stub:
         stub.add_client_error("get_caller_identity", "ExpiredToken", "token expired")

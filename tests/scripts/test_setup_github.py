@@ -28,7 +28,7 @@ def registry_file(tmp_path):
 
 
 def run(tmp_path, monkeypatch, *, token, dry_run, runner=None):
-    monkeypatch.delenv("PE_GITHUB_OWNER", raising=False)
+    monkeypatch.delenv("PREVIEW_ENV_GITHUB_OWNER", raising=False)
     if token:
         monkeypatch.setenv(setup_github.TOKEN_ENV, token)
     else:

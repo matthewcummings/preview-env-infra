@@ -46,5 +46,5 @@ def load_registry(path: Path = DEFAULT_REGISTRY_PATH) -> Registry:
     names = [s.name for s in services]
     if len(set(names)) != len(names):
         raise ValueError(f"duplicate service names in {path}: {names}")
-    owner = os.environ.get("PE_GITHUB_OWNER") or raw["github_owner"]
+    owner = os.environ.get("PREVIEW_ENV_GITHUB_OWNER") or raw["github_owner"]
     return Registry(github_owner=owner, services=services)

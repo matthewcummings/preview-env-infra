@@ -210,7 +210,7 @@ The core of the take-home: deciding which branches of which services run togethe
 
 ### D25. Service registry: nothing hardcodes "A and B"
 
-- **Chose:** `services.yaml` lists each service: name, repo, path prefix, port, health path. The CDK environment construct and the reconciler both loop over it. The GitHub owner is one setting (overridable with `PE_GITHUB_OWNER`), so a fork needs no edits.
+- **Chose:** `services.yaml` lists each service: name, repo, path prefix, port, health path. The CDK environment construct and the reconciler both loop over it. The GitHub owner is one setting (overridable with `PREVIEW_ENV_GITHUB_OWNER`), so a fork needs no edits.
 - **Why:** Adding a service is a data change: one registry entry plus that repo's CI workflow. It is the right shape for the "35 services" discussion. Works on a personal GitHub account, no org needed: all deploys run in the infra repo, and service repos only dispatch.
 
 ---

@@ -25,7 +25,7 @@ env:
   # inline them into `run:` scripts.
   BRANCH: ${{ github.event.client_payload.branch || inputs.branch }}
   GITHUB_TOKEN: ${{ github.token }}  # GitHub API reads without the 60/h anonymous limit
-  PE_GITHUB_OWNER: ${{ github.repository_owner }}
+  PREVIEW_ENV_GITHUB_OWNER: ${{ github.repository_owner }}
 
 jobs:
   plan:

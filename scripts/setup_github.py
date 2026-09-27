@@ -130,7 +130,7 @@ def main(
 
     registry = load_registry(registry_path)
     if registry.github_owner == PLACEHOLDER_OWNER:
-        return fail("set PE_GITHUB_OWNER (or github_owner in services.yaml) first")
+        return fail("set PREVIEW_ENV_GITHUB_OWNER (or github_owner in services.yaml) first")
 
     if session is None:
         import boto3
