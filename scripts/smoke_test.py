@@ -31,9 +31,7 @@ if __package__ in (None, ""):
 from infra.config import DEFAULT_REGION, MAIN_ENV, env_stack_name  # noqa: E402
 from reconciler.registry import DEFAULT_REGISTRY_PATH, load_registry  # noqa: E402
 from reconciler.spec import EnvSpec  # noqa: E402
-from scripts._common import cdk_output_id, fail, stack_outputs  # noqa: E402
-
-URL_OUTPUT = cdk_output_id("Env", "Url")  # infra/environment.py: CfnOutput(env, "Url")
+from scripts._common import env_url, fail  # noqa: E402
 
 # (method, url, json body or None) -> (HTTP status or 0 if unreachable, parsed JSON or text)
 type Http = Callable[[str, str, dict[str, Any] | None], tuple[int, Any]]
@@ -190,10 +188,10 @@ def main(
         session = boto3.Session()
     cfn = session.client("cloudformation", region_name=session.region_name or DEFAULT_REGION)
 
-    url = _env_url(cfn, args.env)
+    url = env_url(cfn, args.env)
     if url is None:
         return fail(f"no URL for env '{args.env}': is {env_stack_name(args.env)} deployed?")
-    main_url = url if args.env == MAIN_ENV else _env_url(cfn, MAIN_ENV)
+    main_url = url if args.env == MAIN_ENV else env_url(cfn, MAIN_ENV)
     print(f"Smoke-testing env '{args.env}' at {url}")
 
     smoke = Smoke(http, wait_seconds=args.wait, sleep=sleep, clock=clock)
@@ -212,12 +210,6 @@ def main(
         f"Smoke test {verdict} for env '{args.env}': {smoke.passed} passed, {smoke.failed} failed"
     )
     return 0 if smoke.failed == 0 else 1
-
-
-def _env_url(cfn: Any, env: str) -> str | None:
-    outputs = stack_outputs(cfn, env_stack_name(env))
-    url = outputs.get(URL_OUTPUT) if outputs else None
-    return url.rstrip("/") if url else None
 
 
 if __name__ == "__main__":

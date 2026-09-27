@@ -35,6 +35,19 @@ def stack_outputs(cfn: Any, stack: str) -> dict[str, str] | None:
     return {_CDK_HASH.sub("", o["OutputKey"]): o["OutputValue"] for o in desc.get("Outputs", [])}
 
 
+# infra/environment.py: CfnOutput(env construct "Env", "Url")
+URL_OUTPUT = cdk_output_id("Env", "Url")
+
+
+def env_url(cfn: Any, env: str) -> str | None:
+    """An env's base URL from its stack's Url output (no trailing slash), or None."""
+    from infra.config import env_stack_name
+
+    outputs = stack_outputs(cfn, env_stack_name(env))
+    url = outputs.get(URL_OUTPUT) if outputs else None
+    return url.rstrip("/") if url else None
+
+
 def infra_repo_name() -> str:
     """This repo's GitHub name: cdk.json context `infraRepo`, else the default in config."""
     from infra.config import DEFAULT_INFRA_REPO

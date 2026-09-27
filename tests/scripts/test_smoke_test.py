@@ -5,7 +5,7 @@ from botocore.stub import Stubber
 from script_fakes import FakeSession, client, stack
 
 from reconciler.spec import EnvSpec, ServiceSpec
-from scripts import smoke_test
+from scripts import _common, smoke_test
 from scripts.smoke_test import Smoke
 
 PREVIEW = "http://preview.example.com"
@@ -191,4 +191,4 @@ def test_url_output_key_ignores_cdk_hash(key):
     cfn = client("cloudformation")
     with Stubber(cfn) as stub:
         stub.add_response("describe_stacks", stack("preview-env-x", {key: "http://x/"}))
-        assert smoke_test._env_url(cfn, "x") == "http://x"
+        assert _common.env_url(cfn, "x") == "http://x"

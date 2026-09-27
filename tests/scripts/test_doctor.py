@@ -42,7 +42,13 @@ class FakeGh:
             for r in REPOS
         }
         self.secrets = {
-            r: (["INFRA_DISPATCH_TOKEN"] if configured and not r.endswith("infra") else [])
+            r: (
+                []
+                if not configured
+                else ["PREVIEW_COMMENT_TOKEN"]
+                if r.endswith("infra")
+                else ["INFRA_DISPATCH_TOKEN"]
+            )
             for r in REPOS
         }
         self.calls = []
@@ -94,6 +100,7 @@ def registry_file(tmp_path, owner="octo"):
 def run(tmp_path, monkeypatch, *, tools=ALL_TOOLS, owner="octo", region="us-east-1"):
     monkeypatch.delenv("PREVIEW_ENV_GITHUB_OWNER", raising=False)
     monkeypatch.delenv("INFRA_DISPATCH_TOKEN", raising=False)
+    monkeypatch.delenv("PREVIEW_COMMENT_TOKEN", raising=False)
     sts, cfn = client("sts"), client("cloudformation")
     with Stubber(sts) as sts_stub, Stubber(cfn) as cfn_stub:
         sts_stub.add_response(
@@ -140,6 +147,7 @@ def test_region_unset_is_only_a_warning(tmp_path, monkeypatch, capsys):
 
 def test_not_bootstrapped(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("INFRA_DISPATCH_TOKEN", raising=False)
+    monkeypatch.delenv("PREVIEW_COMMENT_TOKEN", raising=False)
     sts, cfn = client("sts"), client("cloudformation")
     with Stubber(sts) as sts_stub, Stubber(cfn) as cfn_stub:
         sts_stub.add_response(
@@ -165,6 +173,7 @@ def test_not_bootstrapped(tmp_path, monkeypatch, capsys):
 
 def test_bad_credentials_skip_the_bootstrap_check(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("INFRA_DISPATCH_TOKEN", raising=False)
+    monkeypatch.delenv("PREVIEW_COMMENT_TOKEN", raising=False)
     sts = client("sts")
     with Stubber(sts) as stub:
         stub.add_client_error("get_caller_identity", "ExpiredToken", "token expired")
@@ -194,7 +203,8 @@ def test_github_fully_configured_passes():
         assert names[f"{repo} auto-delete head branches"].status is Status.PASS
         assert names[f"{repo} variables"].status is Status.PASS
     assert names["octo/service-a secret"].status is Status.PASS
-    assert "octo/preview-env-infra secret" not in names  # the secret lives on service repos
+    # Each token is stored where it's used: dispatch token in service repos, comment token in infra.
+    assert names["octo/preview-env-infra secret"].detail == "PREVIEW_COMMENT_TOKEN"
 
 
 def test_gh_missing_fails_and_skips_repo_checks():
@@ -286,6 +296,7 @@ def test_dispatch_unreachable_is_a_warning():
 
 def test_dispatch_failure_makes_doctor_exit_nonzero(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("INFRA_DISPATCH_TOKEN", "github_pat_SECRET_VALUE")
+    monkeypatch.delenv("PREVIEW_COMMENT_TOKEN", raising=False)
     sts, cfn = client("sts"), client("cloudformation")
     with Stubber(sts) as sts_stub, Stubber(cfn) as cfn_stub:
         sts_stub.add_response(
@@ -310,3 +321,81 @@ def test_docker_missing_is_only_a_warning(tmp_path, monkeypatch, capsys):
     """Deploying doesn't need Docker; only the service repos' tests do."""
     assert run(tmp_path, monkeypatch, tools=ALL_TOOLS - {"docker"}) == 0
     assert "[WARN] docker: not found" in capsys.readouterr().out
+
+
+# --- Comment token ---------------------------------------------------------------------------
+
+SERVICE_REPOS = ["octo/service-a", "octo/service-b"]
+
+
+def test_comment_token_secret_missing_on_infra_repo_is_a_warning():
+    gh = FakeGh()
+    gh.secrets["octo/preview-env-infra"] = []
+    result = by_name(github(gh))["octo/preview-env-infra secret"]
+    assert result.status is Status.WARN
+    assert result.detail == "missing PREVIEW_COMMENT_TOKEN"
+    assert result.hint == "run `make setup-github`"
+
+
+def test_comment_token_skipped_when_not_set():
+    (result,) = doctor.check_comment_token(SERVICE_REPOS, None, lambda *a: 200)
+    assert result.status is Status.SKIP
+    assert "only needed while running `make setup-github`" in result.detail
+
+
+def test_comment_token_200_passes_for_each_service_repo():
+    gets = []
+
+    def get(url, token):
+        gets.append((url, token))
+        return 200
+
+    results = doctor.check_comment_token(SERVICE_REPOS, "tok", get)
+    assert [r.status for r in results] == [Status.PASS, Status.PASS]
+    assert results[0].detail == (
+        "can access octo/service-a; write access can't be checked without side effects"
+    )
+    assert gets == [
+        ("https://api.github.com/repos/octo/service-a/pulls?per_page=1", "tok"),
+        ("https://api.github.com/repos/octo/service-b/pulls?per_page=1", "tok"),
+    ]
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_comment_token_denied_fails_with_pointer_to_instructions(status):
+    results = doctor.check_comment_token(
+        SERVICE_REPOS, "tok", lambda url, token: status if "service-b" in url else 200
+    )
+    assert [r.status for r in results] == [Status.PASS, Status.FAIL]
+    assert f"({status})" in results[1].detail
+    assert "Pull requests: Read and write" in results[1].hint
+    assert "token instructions printed by `make setup-github`" in results[1].hint
+
+
+def test_comment_token_is_checked_from_main(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("INFRA_DISPATCH_TOKEN", raising=False)
+    monkeypatch.setenv("PREVIEW_COMMENT_TOKEN", "github_pat_COMMENT_SECRET")
+    path = tmp_path / "services.yaml"
+    path.write_text(
+        "github_owner: octo\nservices:\n"
+        "  - {name: service-a, repo: service-a, path_prefix: /a, port: 8000, health_path: /h}\n"
+    )
+    sts, cfn = client("sts"), client("cloudformation")
+    with Stubber(sts) as sts_stub, Stubber(cfn) as cfn_stub:
+        sts_stub.add_response(
+            "get_caller_identity", {"UserId": "u", "Account": "123456789012", "Arn": ARN}
+        )
+        cfn_stub.add_response("describe_stacks", stack("CDKToolkit"))
+        code = doctor.main(
+            [],
+            session=FakeSession(sts=sts, cloudformation=cfn),
+            which=which(ALL_TOOLS | {"gh"}),
+            gh=FakeGh(),
+            post=never_post,
+            get=lambda url, token: 403,
+            registry_path=path,
+        )
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "[FAIL] PREVIEW_COMMENT_TOKEN can access octo/service-a" in out
+    assert "COMMENT_SECRET" not in out

@@ -123,16 +123,27 @@ Supported: macOS, Linux, or Windows via WSL2.
 
 **Either way, you also need `make`** (macOS: Xcode Command Line Tools; Ubuntu/WSL: `sudo apt install make`). Docker is only needed to run the service repos' tests, not to deploy: CI builds the images.
 
-### 3. Set up AWS access, your GitHub owner and a GitHub token
+### 3. Set up AWS access, your GitHub owner and two GitHub tokens
+
+Set these **in the terminal you'll deploy from**. If your credentials come from a script or `aws sso login`, run it in that same terminal; `make doctor` (step 4) catches anything missing.
 
 - **AWS:** your terminal needs credentials for an IAM identity with admin rights. Only this first-time setup uses them; CI never does. Choose your region **once** in your AWS config (`AWS_REGION` or your profile's `region`; `us-east-1` if unset), and everything else follows it.
 - **GitHub owner:** in your fork of `preview-env-infra`, set `github_owner` in [`services.yaml`](services.yaml) to the owner of your forks: your GitHub organization, or for personal forks, your GitHub username. (Alternatively, set the `PREVIEW_ENV_GITHUB_OWNER` environment variable.)
-- **GitHub token:** the service repos' CI needs a token that lets it signal this repo. Create a fine-grained token at [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new):
-  - **Resource owner:** your GitHub owner. **Expiration:** 30 days.
-  - **Repository access:** "Only select repositories", then only **`preview-env-infra`**.
-  - **Repository permissions:** **Contents: Read and write** (Metadata: read-only is added automatically).
+- **Two GitHub tokens**, each able to do exactly one job. Create both as fine-grained tokens at [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new), with your GitHub owner as **Resource owner** and a 30-day **Expiration**:
 
-  Then `export INFRA_DISPATCH_TOKEN=<the token>` in your terminal. Step 4 checks it, and step 7 stores it in the service repos.
+  | Token | Repository access ("Only select repositories") | Repository permissions | What it's for |
+  |---|---|---|---|
+  | **Dispatch token** | `preview-env-infra` only | Contents: Read and write | Lets the service repos' CI signal this repo to deploy |
+  | **Comment token** | `service-a` and `service-b` | Pull requests: Read and write | Lets this repo's workflow post the preview URL on service-repo PRs |
+
+  (Metadata: read-only is added automatically.) Two tokens because a fine-grained token gets the same permissions on every repo it covers: one combined token would be able to push code to all three repos. Neither of these can.
+
+  ```bash
+  export INFRA_DISPATCH_TOKEN=<the dispatch token>
+  export PREVIEW_COMMENT_TOKEN=<the comment token>
+  ```
+
+  Step 4 checks them, and step 7 stores them as secrets in the right repos.
 
 ### 4. Check your setup
 
@@ -140,7 +151,7 @@ Supported: macOS, Linux, or Windows via WSL2.
 make doctor
 ```
 
-A read-only checklist: tools, AWS credentials and region, CDK bootstrap, your GitHub repos and their settings, and whether your token can signal this repo. On a fresh setup, expect warnings for the things later steps do (no CDK bootstrap yet, GitHub not configured yet). Anything marked FAIL needs fixing first. Rerun it any time.
+A read-only checklist: tools, AWS credentials and region, CDK bootstrap, your GitHub repos and their settings, and whether your tokens can reach the repos they need. On a fresh setup, expect warnings for the things later steps do (no CDK bootstrap yet, GitHub not configured yet). Anything marked FAIL needs fixing first. Rerun it any time.
 
 ### 5. Bootstrap CDK (once per account and region)
 
@@ -164,7 +175,7 @@ Creates the `preview-baseline` stack: the VPC and NAT gateway, the ECS cluster, 
 make setup-github
 ```
 
-This sets the GitHub Actions variables on all three repos from `preview-baseline`'s outputs, stores the token as a secret in the two service repos, and turns on **"Automatically delete head branches"** so that merging a PR deletes its branch and tears its preview down. `make setup-github DRY_RUN=1` shows the `gh` commands without running them. Rerun `make doctor` afterwards: the GitHub checks should all pass.
+This sets the GitHub Actions variables on all three repos from `preview-baseline`'s outputs, stores the dispatch token as a secret in the two service repos and the comment token in this repo, and turns on **"Automatically delete head branches"** so that merging a PR deletes its branch and tears its preview down. `make setup-github DRY_RUN=1` shows the `gh` commands without running them. Rerun `make doctor` afterwards: the GitHub checks should all pass.
 
 ### 8. Build the first images and deploy `main`
 
@@ -190,21 +201,33 @@ This creates the `demo` preview environment: service-a on your branch, service-b
 
 ### Working with preview environments
 
+Once set up, day-to-day use is just branches: push `preview/<group>/...` to create or update an environment, and delete (or merge) the branch to remove it.
+
+**Finding an environment's URL:**
+- **On the PR:** every open PR from a branch in the group gets a comment with the environment's URL, which branch of each service is running, and the smoke test result. It's the same comment, updated on every deploy, and it says so when the environment is removed.
+- **In the run summary:** this repo's **Actions** tab shows the plan and the URL for every deploy.
+- **From your terminal,** with AWS access: `make url ENV=<group>`.
+
+Then, for example:
+
 ```bash
-URL=$(aws cloudformation describe-stacks --stack-name preview-env-demo \
-      --query "Stacks[0].Outputs[?contains(OutputKey,'Url')].OutputValue" --output text)
-curl $URL/a/version          # {"service": "service-a", "env": "demo", "branch": "preview/demo/hello", ...}
-curl $URL/b/version          # service-b on main
-curl -X POST $URL/a/items -H 'content-type: application/json' -d '{"name": "hello"}'
+curl <url>/a/version    # {"service": "service-a", "env": "demo", "branch": "preview/demo/hello", ...}
+curl <url>/b/version    # service-b on main
+curl -X POST <url>/a/items -H 'content-type: application/json' -d '{"name": "hello"}'
 ```
+
+**Can't reach an environment?** Every load balancer only accepts traffic from IP addresses on the allowlist. Add yourself with `make allow-ip`, or a teammate with `make allow-ip CIDR=<their IP>/32`.
+
+For operators, with AWS access:
 
 | Command | What it does |
 |---|---|
 | `make plan BRANCH=... \| GROUP=...` | Show what the reconciler would do, without changing anything. Add `NO_AWS=1` to see the branch-to-service decisions with no AWS account at all (it only reads GitHub). |
-| `make preview BRANCH=...` | Reconcile one environment by hand (the same thing CI does). |
+| `make preview BRANCH=...` | Create, update or tear down one environment from your laptop, exactly as CI would. |
+| `make url ENV=<env>` | Print an environment's URL. |
 | `make smoke ENV=<env>` | Run the smoke test against an environment. |
 | `make allow-ip` / `disallow-ip` / `list-ips` | Manage the load balancer allowlist (your IP by default, or `CIDR=...`). |
-| `make teardown GROUP=<group>` | Operator tool: delete a preview now, even if its branches still exist (for a missed delete event). |
+| `make teardown GROUP=<group>` | Delete a preview now, even if its branches still exist (for a missed delete event). |
 
 All targets: `make help`. What each GitHub Actions workflow does: [`docs/operations.md`](docs/operations.md).
 
@@ -224,16 +247,17 @@ All targets: `make help`. What each GitHub Actions workflow does: [`docs/operati
 - **The APIs have no authentication, so every load balancer is IP-allowlisted** through a shared managed prefix list. Nothing is open to the internet unless you add it. CI adds its runner's IP only for the smoke test and always removes it (D42).
 - **HTTP only, no TLS.** A certificate needs a domain; with one, I'd add HTTPS and authentication at the load balancer.
 - The database is IAM-auth only: no DB passwords in the apps (D16).
+- **Two narrowly scoped GitHub tokens**, one per job (signal the infra repo; comment on service-repo PRs), so neither can push code. Long term, both would be replaced by a GitHub App: one installable identity, no personal tokens.
 
 ## What's built, and what's next
 
-**Built:** the four prompt scenarios, teardown, per-environment databases copied from `main`, the queueing and races, IP allowlisting, smoke tests, and the setup tooling.
+**Built:** the four prompt scenarios, teardown, per-environment databases copied from `main`, the queueing and races, IP allowlisting, smoke tests, preview URLs posted on PRs, and the setup tooling.
 
 **Documented, not built** (D29 in [`docs/decisions.md`](docs/decisions.md)):
 - A nightly sweep and age limit for forgotten environments.
 - Reconciling every environment when `main` moves (today, previews pick up new `main` images on their next push).
 - A cap on concurrent previews.
-- Stale-branch warnings, and PR comments with the environment URL.
+- Stale-branch warnings.
 - `cdk diff` on infra PRs.
 - Alerting on the shared cluster.
 - A "reset preview data" workflow.

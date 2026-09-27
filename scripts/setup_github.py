@@ -1,4 +1,4 @@
-"""Wire the GitHub repos to AWS after preview-baseline is deployed: repo variables and one secret.
+"""Wire the GitHub repos to AWS after preview-baseline is deployed: repo variables and secrets.
 
     uv run python scripts/setup_github.py [--dry-run]
 
@@ -7,12 +7,17 @@ Uses the `gh` CLI (you must be logged in: `gh auth login`). Sets:
                         branch deletes it and tears its env down (D7, D23)
   - each service repo:  AWS_REGION, AWS_ROLE_ARN (its own push-only role, D11),
                         INFRA_REPO (<owner>/<infra repo>), and the INFRA_DISPATCH_TOKEN secret
-  - the infra repo:     AWS_REGION, AWS_DEPLOY_ROLE_ARN (the infra role, D32)
+  - the infra repo:     AWS_REGION, AWS_DEPLOY_ROLE_ARN (the infra role, D32), and the
+                        PREVIEW_COMMENT_TOKEN secret
 
-Role ARNs come from preview-baseline's stack outputs. The secret's value comes from the
-INFRA_DISPATCH_TOKEN environment variable and is passed to `gh` on stdin, so it never
-appears in output or in the process list. --dry-run prints the commands without running
-them.
+Role ARNs come from preview-baseline's stack outputs. Each secret's value comes from the
+environment variable of the same name and is passed to `gh` on stdin, so it never appears
+in output or in the process list. A missing token: everything else is still set, then the
+instructions for creating it are printed and the exit code is 1. --dry-run prints the
+commands without running them.
+
+Two tokens, not one: a fine-grained token grants the same permissions on every repo it
+selects, so one token for both jobs would need both permissions everywhere.
 """
 
 import argparse
@@ -37,20 +42,36 @@ from scripts._common import (  # noqa: E402
 )
 
 TOKEN_ENV = "INFRA_DISPATCH_TOKEN"
+COMMENT_TOKEN_ENV = "PREVIEW_COMMENT_TOKEN"
 PLACEHOLDER_OWNER = "CHANGE_ME"
 
 TOKEN_HELP = """\
-{name} is not set, so the dispatch secret was not configured. Create it once:
+Not set: {missing}. Create each missing token once at
+https://github.com/settings/personal-access-tokens/new (fine-grained token), then
+export it and rerun this script. Two tokens because a fine-grained token grants the same
+permissions on every repo it selects. For each: Resource owner: {owner}. Expiration: 30 days.
+Metadata: Read-only is added automatically. Nothing else.
+"""
 
-  1. https://github.com/settings/personal-access-tokens/new (fine-grained token)
-  2. Resource owner: {owner}. Expiration: 30 days.
-  3. Repository access: "Only select repositories": ONLY {infra}
-  4. Repository permissions: Contents: Read and write (needed to send repository_dispatch).
-     Metadata: Read-only is added automatically. Nothing else.
-  5. Then: export {name}=<the token> and rerun this script.
+DISPATCH_TOKEN_HELP = """\
+{name}: the service repos' CI uses it only to signal {infra}
+that a branch changed.
+  Repository access: "Only select repositories": ONLY {infra}
+  Repository permissions: Contents: Read and write (needed to send repository_dispatch).
+  export {name}=<the token>
+"""
 
-The service repos' CI uses this token only to signal {infra}; the reconciler reads the
-service repos with the infra workflow's own GITHUB_TOKEN, so the token needs no access to them.
+COMMENT_TOKEN_HELP = """\
+{name}: {infra}'s reconcile workflow uses it only to post
+the preview URL on service-repo pull requests.
+  Repository access: "Only select repositories": ONLY {services}
+  Repository permissions: Pull requests: Read and write.
+  export {name}=<the token>
+"""
+
+TOKEN_HELP_FOOTER = """\
+The reconciler reads the service repos with the infra workflow's own GITHUB_TOKEN, so
+neither token needs more than this.
 """
 
 
@@ -58,10 +79,11 @@ service repos with the infra workflow's own GITHUB_TOKEN, so the token needs no 
 class Command:
     args: list[str]
     stdin: str | None = None  # secret values go here, never into args
+    stdin_from: str = ""  # the env var the secret came from, for display
 
     def display(self) -> str:
         shown = " ".join(self.args)
-        return f"{shown}  (value from ${TOKEN_ENV})" if self.stdin is not None else shown
+        return f"{shown}  (value from ${self.stdin_from})" if self.stdin is not None else shown
 
 
 def role_arns(outputs: dict[str, str], registry: Registry) -> tuple[dict[str, str], str]:
@@ -90,12 +112,16 @@ def build_commands(
     service_roles: dict[str, str],
     infra_role: str,
     token: str | None,
+    comment_token: str | None = None,
 ) -> list[Command]:
     owner = registry.github_owner
     infra_full = f"{owner}/{infra_repo}"
 
     def var(repo: str, name: str, value: str) -> Command:
         return Command(["gh", "variable", "set", name, "--repo", repo, "--body", value])
+
+    def secret(repo: str, name: str, value: str) -> Command:
+        return Command(["gh", "secret", "set", name, "--repo", repo], stdin=value, stdin_from=name)
 
     # Merging a branch then deletes it, so "merged" and "deleted" are the same event and
     # teardown only has to handle deletion (D7). Harmless on the infra repo; set for consistency.
@@ -109,18 +135,30 @@ def build_commands(
             var(repo, "INFRA_REPO", infra_full),
         ]
         if token is not None:
-            commands.append(
-                Command(["gh", "secret", "set", TOKEN_ENV, "--repo", repo], stdin=token)
-            )
+            commands.append(secret(repo, TOKEN_ENV, token))
     commands += [
         var(infra_full, "AWS_REGION", region),
         var(infra_full, "AWS_DEPLOY_ROLE_ARN", infra_role),
     ]
+    if comment_token is not None:
+        commands.append(secret(infra_full, COMMENT_TOKEN_ENV, comment_token))
     return commands
 
 
-def token_help(owner: str, infra_repo: str) -> str:
-    return TOKEN_HELP.format(name=TOKEN_ENV, owner=owner, infra=f"{owner}/{infra_repo}")
+def token_help(registry: Registry, infra_repo: str, missing: Sequence[str]) -> str:
+    """Instructions for creating the missing token(s): exact repos, one permission each."""
+    owner = registry.github_owner
+    infra = f"{owner}/{infra_repo}"
+    services = ", ".join(f"{owner}/{s.repo}" for s in registry.services)
+    parts = [TOKEN_HELP.format(missing=", ".join(missing), owner=owner)]
+    if TOKEN_ENV in missing:
+        parts.append(DISPATCH_TOKEN_HELP.format(name=TOKEN_ENV, infra=infra))
+    if COMMENT_TOKEN_ENV in missing:
+        parts.append(
+            COMMENT_TOKEN_HELP.format(name=COMMENT_TOKEN_ENV, infra=infra, services=services)
+        )
+    parts.append(TOKEN_HELP_FOOTER)
+    return "\n".join(parts)
 
 
 def run_command(command: Command) -> int:
@@ -156,6 +194,7 @@ def main(
         return fail(str(err))
 
     token = os.environ.get(TOKEN_ENV) or None
+    comment_token = os.environ.get(COMMENT_TOKEN_ENV) or None
     infra_repo = infra_repo_name()
     commands = build_commands(
         registry=registry,
@@ -164,6 +203,7 @@ def main(
         service_roles=service_roles,
         infra_role=infra_role,
         token=token,
+        comment_token=comment_token,
     )
 
     for command in commands:
@@ -171,9 +211,14 @@ def main(
         if not args.dry_run and runner(command) != 0:
             return fail(f"`{' '.join(command.args[:4])}` failed; is `gh auth login` done?")
 
-    if token is None:
+    missing = [
+        name
+        for name, value in ((TOKEN_ENV, token), (COMMENT_TOKEN_ENV, comment_token))
+        if not value
+    ]
+    if missing:
         print()
-        print(token_help(registry.github_owner, infra_repo))
+        print(token_help(registry, infra_repo, missing))
         return 1
     print("GitHub repos configured." if not args.dry_run else "Dry run: nothing was changed.")
     return 0

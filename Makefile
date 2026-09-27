@@ -3,7 +3,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help test lint synth doctor bootstrap deploy-baseline setup-github deploy-main \
-	preview plan teardown smoke allow-ip disallow-ip list-ips
+	preview plan teardown smoke url allow-ip disallow-ip list-ips
 
 RECONCILE := uv run python -m reconciler
 
@@ -58,6 +58,9 @@ teardown: ## Delete the env for GROUP=... now, even if its branches still exist
 
 smoke: ## Smoke-test ENV=... (SPEC=envspec.json also checks the deployed SHAs)
 	uv run python scripts/smoke_test.py $(ENV) $(SPEC_FLAG)
+
+url: ## Print an environment's URL (needs AWS access)
+	uv run python scripts/env_url.py $(ENV)
 
 allow-ip: ## Allow your public IP (or CIDR=...) through every env's ALB
 	uv run python scripts/allow_ip.py add $(CIDR_FLAG)

@@ -35,6 +35,8 @@ BOOTSTRAP_STACK = "CDKToolkit"
 PLACEHOLDER_OWNER = "CHANGE_ME"
 OWNER_ENV = "PREVIEW_ENV_GITHUB_OWNER"
 TOKEN_ENV = "INFRA_DISPATCH_TOKEN"
+COMMENT_TOKEN_ENV = "PREVIEW_COMMENT_TOKEN"
+TOKEN_DOCS = "see the token instructions printed by `make setup-github`"
 DISPATCH_CHECK_EVENT = "doctor-permission-check"
 SETUP_HINT = "run `make setup-github`"
 
@@ -55,6 +57,8 @@ TOOLS = [
 type Gh = Callable[[list[str]], tuple[int, str]]
 # post(url, token, json body) -> HTTP status (0 if unreachable)
 type Post = Callable[[str, str, dict[str, Any]], int]
+# get(url, token) -> HTTP status (0 if unreachable)
+type Get = Callable[[str, str], int]
 
 
 class Status(StrEnum):
@@ -159,13 +163,19 @@ def check_github(
     gh: Gh,
     post: Post,
     token: str | None,
+    get: Get | None = None,
+    comment_token: str | None = None,
 ) -> list[Result]:
     owner = registry.github_owner
     if owner == PLACEHOLDER_OWNER:
         return [Result(Status.SKIP, "GitHub repos", "GitHub owner not set (see above)")]
 
     infra_full = f"{owner}/{infra_repo}"
-    results = [check_dispatch_token(infra_full, token, post)]
+    service_repos = [f"{owner}/{s.repo}" for s in registry.services]
+    results = [
+        check_dispatch_token(infra_full, token, post),
+        *check_comment_token(service_repos, comment_token, get or http_get),
+    ]
 
     # gh is required: `make setup-github` configures the repos with it, and these checks use it.
     if which("gh") is None:
@@ -183,14 +193,18 @@ def check_github(
         ]
     repo_results = [Result(Status.PASS, "gh", "installed and logged in")]
 
-    repos = [(f"{owner}/{s.repo}", SERVICE_REPO_VARIABLES, True) for s in registry.services]
-    repos.append((infra_full, INFRA_REPO_VARIABLES, False))
-    for repo, variables, needs_secret in repos:
-        repo_results += check_repo(repo, variables, needs_secret=needs_secret, gh=gh)
+    # Each secret lives where its user runs: the dispatch token in the service repos (their
+    # CI signals the infra repo), the comment token in the infra repo (it comments on PRs).
+    repos = [(r, SERVICE_REPO_VARIABLES, [TOKEN_ENV]) for r in service_repos]
+    repos.append((infra_full, INFRA_REPO_VARIABLES, [COMMENT_TOKEN_ENV]))
+    for repo, variables, secrets in repos:
+        repo_results += check_repo(repo, variables, secrets=secrets, gh=gh)
     return repo_results + results
 
 
-def check_repo(repo: str, variables: Sequence[str], *, needs_secret: bool, gh: Gh) -> list[Result]:
+def check_repo(
+    repo: str, variables: Sequence[str], *, secrets: Sequence[str], gh: Gh
+) -> list[Result]:
     code, out = gh(["api", f"repos/{repo}", "--jq", ".delete_branch_on_merge"])
     if code != 0:
         return [
@@ -209,8 +223,8 @@ def check_repo(repo: str, variables: Sequence[str], *, needs_secret: bool, gh: G
         results.append(Result(Status.WARN, f"{repo} auto-delete head branches", "off", SETUP_HINT))
 
     results.append(_names_present(gh, repo, "variable", "variables", variables))
-    if needs_secret:
-        results.append(_names_present(gh, repo, "secret", "secret", [TOKEN_ENV]))
+    if secrets:
+        results.append(_names_present(gh, repo, "secret", "secret", secrets))
     return results
 
 
@@ -244,10 +258,7 @@ def check_dispatch_token(infra_full: str, token: str | None, post: Post) -> Resu
     status = post(url, token, {"event_type": DISPATCH_CHECK_EVENT})
     if status == 204:
         return Result(Status.PASS, name, "yes (204)")
-    hint = (
-        "the token needs access to ONLY that repo with Contents: Read and write; "
-        "see the token instructions printed by `make setup-github`"
-    )
+    hint = f"the token needs access to ONLY that repo with Contents: Read and write; {TOKEN_DOCS}"
     reasons = {
         401: "token rejected (401): expired or mistyped",
         403: "forbidden (403): the token lacks Contents: Read and write",
@@ -256,6 +267,48 @@ def check_dispatch_token(infra_full: str, token: str | None, post: Post) -> Resu
     if status in reasons:
         return Result(Status.FAIL, name, reasons[status], hint)
     return Result(Status.WARN, name, f"unexpected response ({status or 'unreachable'})", hint)
+
+
+def check_comment_token(repos: Sequence[str], token: str | None, get: Get) -> list[Result]:
+    """Can the local comment token read each service repo's PRs? Read only: proving write
+    access would mean posting a comment, so that part isn't checked."""
+    if not token:
+        return [
+            Result(
+                Status.SKIP,
+                f"{COMMENT_TOKEN_ENV} can access the service repos",
+                f"{COMMENT_TOKEN_ENV} not set locally (only needed while running "
+                "`make setup-github`)",
+            )
+        ]
+    hint = (
+        f"the token needs access to ONLY the service repos with Pull requests: Read and "
+        f"write; {TOKEN_DOCS}"
+    )
+    reasons = {
+        401: "token rejected (401): expired or mistyped",
+        403: "forbidden (403): the token lacks Pull requests access",
+        404: "not found (404): the token can't see this repo",
+    }
+    results = []
+    for repo in repos:
+        name = f"{COMMENT_TOKEN_ENV} can access {repo}"
+        status = get(f"https://api.github.com/repos/{repo}/pulls?per_page=1", token)
+        if status == 200:
+            results.append(
+                Result(
+                    Status.PASS,
+                    name,
+                    f"can access {repo}; write access can't be checked without side effects",
+                )
+            )
+        elif status in reasons:
+            results.append(Result(Status.FAIL, name, reasons[status], hint))
+        else:
+            results.append(
+                Result(Status.WARN, name, f"unexpected response ({status or 'unreachable'})", hint)
+            )
+    return results
 
 
 def _first_line(text: str) -> str:
@@ -267,17 +320,32 @@ def run_gh(args: list[str]) -> tuple[int, str]:
     return proc.returncode, proc.stdout if proc.returncode == 0 else proc.stderr
 
 
+def http_get(url: str, token: str) -> int:
+    request = urllib.request.Request(url, headers=_github_headers(token))
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
+            return response.status
+    except urllib.error.HTTPError as err:
+        return err.code
+    except urllib.error.URLError, TimeoutError:
+        return 0
+
+
+def _github_headers(token: str) -> dict[str, str]:
+    return {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "preview-env-doctor",
+    }
+
+
 def http_post(url: str, token: str, body: dict[str, Any]) -> int:
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode(),
         method="POST",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "preview-env-doctor",
-        },
+        headers=_github_headers(token),
     )
     try:
         with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
@@ -304,6 +372,7 @@ def main(
     which: Callable[[str], str | None] = shutil.which,
     gh: Gh = run_gh,
     post: Post = http_post,
+    get: Get = http_get,
     registry_path: Path = DEFAULT_REGISTRY_PATH,
 ) -> int:
     argparse.ArgumentParser(description=__doc__.split("\n\n")[0]).parse_args(argv)
@@ -323,6 +392,8 @@ def main(
             gh=gh,
             post=post,
             token=os.environ.get(TOKEN_ENV) or None,
+            get=get,
+            comment_token=os.environ.get(COMMENT_TOKEN_ENV) or None,
         ),
     ]
     print(render(results))

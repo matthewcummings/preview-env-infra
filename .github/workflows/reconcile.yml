@@ -114,6 +114,7 @@ jobs:
           uv run python scripts/allow_ip.py add --cidr "${ip}/32"
 
       - name: Smoke test
+        id: smoke
         if: steps.runner-ip.outcome == 'success'
         env:
           ENV_NAME: ${{ steps.apply.outputs.env }}
@@ -124,3 +125,32 @@ jobs:
         env:
           CIDR: ${{ steps.runner-ip.outputs.cidr }}
         run: uv run python scripts/allow_ip.py remove --cidr "$CIDR"
+
+      # Post the env URL as a sticky comment on the group's service-repo PRs (optional:
+      # skipped inside the script if the PREVIEW_COMMENT_TOKEN secret isn't set). Runs even
+      # if the smoke test failed, so the PR shows that too; never after a failed apply, and
+      # never for main (no preview PRs). A failed comment never fails the run.
+      - name: Comment on PRs
+        if: >-
+          always()
+          && steps.apply.outcome == 'success'
+          && steps.apply.outputs.env != 'main'
+          && contains(fromJSON('["create", "update", "delete-then-create", "destroy"]'), steps.apply.outputs.action)
+        # Belt and braces: the script already exits 0 on GitHub errors, but e.g. a failed URL
+        # lookup must not turn a good deploy red either.
+        continue-on-error: true
+        env:
+          PREVIEW_COMMENT_TOKEN: ${{ secrets.PREVIEW_COMMENT_TOKEN }}
+          ENV_NAME: ${{ steps.apply.outputs.env }}
+          ACTION: ${{ steps.apply.outputs.action }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SMOKE: ${{ steps.smoke.outcome == 'success' && 'passed' || steps.smoke.outcome == 'failure' && 'failed' || 'skipped' }}
+        run: |
+          if [ "$ACTION" = "destroy" ]; then
+            uv run python scripts/pr_comment.py --group "$ENV_NAME" --action destroy \
+              --run-url "$RUN_URL"
+          else
+            url="$(uv run python scripts/env_url.py "$ENV_NAME")"
+            uv run python scripts/pr_comment.py --group "$ENV_NAME" --action "$ACTION" \
+              --url "$url" --spec envspec.json --run-url "$RUN_URL" --smoke "$SMOKE"
+          fi
