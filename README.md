@@ -260,6 +260,7 @@ All targets: `make help`. What each GitHub Actions workflow does: [`docs/operati
 - Stale-branch warnings.
 - `cdk diff` on infra PRs.
 - Alerting on the shared cluster.
+- A `make tokens` helper: GitHub has no API for creating personal access tokens, so it would open the token page with the exact settings, read each token with hidden input, verify it, and hand it to `make setup-github`. (A GitHub App would remove the tokens entirely.)
 - A "reset preview data" workflow.
 
 **Scaling past a handful of services:** every preview runs every service, so databases and connections grow with environments x services. The fix, in order: smaller pools (done), **partial environments** (deploy only the services that changed and route the rest to `main`), RDS Proxy, then a cluster per service (D41).
