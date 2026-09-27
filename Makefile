@@ -13,6 +13,12 @@ CIDR_FLAG := $(if $(CIDR),--cidr $(CIDR))
 SPEC_FLAG := $(if $(SPEC),--spec $(SPEC))
 PLAN_TARGET := $(if $(BRANCH),--branch $(BRANCH),$(if $(GROUP),--group $(GROUP),--env main))
 
+# The pinned CDK CLI (package-lock.json). Installed on first use, so `npx cdk` never falls back
+# to downloading whatever version is newest.
+node_modules: package.json package-lock.json
+	npm ci --no-audit --no-fund
+	@touch node_modules
+
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-17s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
@@ -23,25 +29,25 @@ lint: ## Ruff lint + format check
 	uv run ruff check
 	uv run ruff format --check
 
-synth: ## cdk synth, no AWS credentials needed
+synth: node_modules ## cdk synth, no AWS credentials needed
 	npx cdk synth -q
 
 doctor: ## Check tools, AWS credentials, region, CDK bootstrap, GitHub owner
 	uv run python scripts/doctor.py
 
-bootstrap: ## One-time CDK bootstrap of the account/region
+bootstrap: node_modules ## One-time CDK bootstrap of the account/region
 	npx cdk bootstrap
 
-deploy-baseline: ## Deploy preview-baseline (reuses an existing GitHub OIDC provider); first time: add ALLOW_MY_IP=1
+deploy-baseline: node_modules ## Deploy preview-baseline (reuses an existing GitHub OIDC provider); first time: add ALLOW_MY_IP=1
 	uv run python scripts/deploy_baseline.py $(if $(ALLOW_MY_IP),--allow-my-ip)
 
 setup-github: ## Set GitHub repo variables + dispatch secret from preview-baseline outputs (DRY_RUN=1 to preview)
 	uv run python scripts/setup_github.py $(if $(DRY_RUN),--dry-run)
 
-deploy-main: ## Reconcile the shared main env (newest built main image per service)
+deploy-main: node_modules ## Reconcile the shared main env (newest built main image per service)
 	$(RECONCILE) apply --env main
 
-preview: ## Reconcile the env for BRANCH=preview/<group>[/...] (create, update or tear down)
+preview: node_modules ## Reconcile the env for BRANCH=preview/<group>[/...] (create, update or tear down)
 	$(RECONCILE) apply --branch $(BRANCH)
 
 plan: ## Show the plan for BRANCH=... or GROUP=... (default: main); NO_AWS=1 for SHAs only

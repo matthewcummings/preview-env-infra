@@ -37,7 +37,9 @@ A and B are service-a and service-b. The same rules apply to any number of servi
 - [`docs/decisions.md`](docs/decisions.md): every design decision (D1-D42), what I considered and why. Code comments cite these IDs.
 - [How it works](#how-it-works) below, then the code: [`reconciler/core.py`](reconciler/core.py) is the heart of it.
 
-<!-- TODO(matt): video link, live URL note, CI run links -->
+**Proof it works:** every push runs the tests, lint and `cdk synth` in public GitHub Actions ([infra](https://github.com/matthewcummings/preview-env-infra/actions), [service-a](https://github.com/matthewcummings/service-a/actions), [service-b](https://github.com/matthewcummings/service-b/actions)), and every deploy runs a smoke test against the live environment.
+
+<!-- TODO(matt): video link, live URL note, links to specific preview deploy runs -->
 
 ## Service boundaries and data ownership
 
@@ -90,18 +92,6 @@ flowchart LR
 
 **Races:** each group maps to exactly one stack, and deploys for the same environment queue up (GitHub Actions `concurrency`). GitHub keeps only the newest waiting run per queue and drops older ones. That's safe here because every run recomputes the whole plan from GitHub and CloudFormation, so the newest run always covers everything (D24).
 
-## Quick look without AWS
-
-Needs only [uv](https://docs.astral.sh/uv/), Node.js (for the CDK CLI via `npx`), `make`, and Docker for the service tests.
-
-```bash
-make test                                   # ~220 tests: reconciler, CDK assertions, scripts
-make synth                                  # cdk synth with no AWS credentials at all
-make plan BRANCH=preview/checkout/api NO_AWS=1   # what the reconciler would do (reads public GitHub)
-```
-
-In either service repo: `uv run pytest` (starts a throwaway Postgres 17 with testcontainers).
-
 ## Deploy it yourself
 
 ### Prerequisites
@@ -138,7 +128,7 @@ curl -X POST $URL/a/items -H 'content-type: application/json' -d '{"name": "hell
 
 | Command | What it does |
 |---|---|
-| `make plan BRANCH=... \| GROUP=...` | Show what the reconciler would do. |
+| `make plan BRANCH=... \| GROUP=...` | Show what the reconciler would do, without changing anything. Add `NO_AWS=1` to see the branch-to-service decisions with no AWS account at all (it only reads GitHub). |
 | `make preview BRANCH=...` | Reconcile one environment by hand (the same thing CI does). |
 | `make smoke ENV=<env>` | Run the smoke test against an environment. |
 | `make allow-ip` / `disallow-ip` / `list-ips` | Manage the load balancer allowlist (your IP by default, or `CIDR=...`). |
@@ -194,6 +184,18 @@ Idle, the fixed costs are the NAT gateway (~$0.045/hour), Aurora's minimum 0.5 A
 | `services.yaml` | The service registry: adding a service is one entry here (D25). |
 | `.github/workflows/` | `ci.yml` (PR checks), `platform.yml` (deploy on `main`), `reconcile.yml` (previews). |
 | `tests/` | Reconciler, CDK assertion and script tests. |
+
+## Development
+
+From this repo's root (needs uv, Node.js and `make`; Docker only for the service repos' tests):
+
+```bash
+make test     # all tests: reconciler, CDK template assertions, scripts (no AWS, no network)
+make lint     # ruff lint + format check
+make synth    # generate the CloudFormation templates; no AWS credentials needed
+```
+
+In each service repo, `uv run pytest` runs the app's tests against a throwaway Postgres 17 (testcontainers).
 
 ## Glossary
 
