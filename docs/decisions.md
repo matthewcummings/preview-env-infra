@@ -69,6 +69,7 @@ This repo builds per-branch preview environments for two containerized FastAPI +
 | D44 | Preview URL as a sticky PR comment; two narrow GitHub tokens | [CI/CD and security](#cicd-and-security) | Built |
 | D45 | No image yet: wait, don't fail | [Reliability](#reliability) | Built |
 | D46 | `make doctor`: a preflight checklist | [Reviewer experience](#reviewer-experience) | Built |
+| D47 | Which image each service runs, safely with migrations | [Reliability](#reliability) | Built |
 
 ---
 
@@ -442,6 +443,19 @@ The preview half of this decision was revised by D40 (where the database lives).
 - **Why:** It turns "functional end to end" from a claim into something CI checks every run, with public logs as evidence.
 - **How CI reaches the env:** The ALBs are allowlisted (D42), so the job adds its runner's IP, runs the test, and always removes the IP. `make smoke ENV=<env>` runs the same test from a laptop.
 - **Downstream (documented):** Integration and load testing (pytest, k6, Locust) belong to the teams using the previews. The deploy job publishes the env URL as a job output so their tests can run against it.
+
+### D47. Which image each service runs, safely with migrations
+
+**Rules:**
+- **Service with a branch in the group:** the branch head's image if it's built; otherwise the **newest built commit in the branch's own history** (last 20 commits), with a note in the plan; only if none of those is built, `main`.
+- **Service without a branch, and the `main` environment:** the newest `main` commit that has a `main-<sha>` image. (Not `<sha>`: with merge commits, `main`'s history includes feature-branch commits whose `<sha>` images were built from preview branches.)
+- **No image at all:** wait (D45).
+
+**Why:** a preview's database carries the branch's migrations. Falling back from an unbuilt branch head to the *current* `main` could run code that migrated the database past what the branch knows; when the branch's image arrived, `migrate` failed on an unknown revision. It happened on a quick second push, or a merge with a migration while the new `main` image was still building.
+
+**The branch-point case:** a branch cut from `main` at M2 with one unbuilt commit B1 walks B1, then M2, and runs M2. That's exactly the code the branch contains minus B1, so it's safe. Restricting the walk to the branch's own commits would cost an extra GitHub API call per branch and, when none were built, force the fallback to *current* `main`, reintroducing the problem. If `main` has moved on with a migration since the branch was cut, M2 fails the stale-branch check, but so would B1: the fix is the same (merge or rebase `main`). During that window `/version` reports `"branch": "main"`, because M2's image was built on `main`; the SHA is correct, and the smoke test checks the SHA.
+
+**Related:** the reconcile workflow's apply step also runs for `noop` and `wait`, so the fresh plan inside the environment's queue always makes the final decision (D24).
 
 ### D45. No image yet: wait, don't fail
 

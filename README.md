@@ -34,7 +34,7 @@ A and B are service-a and service-b. The same rules apply to any number of servi
 - Branches without the `preview/` prefix get no environment, loudly: CI explains why and how to rename the branch.
 
 **Where to look next:**
-- [`docs/decisions.md`](docs/decisions.md): every design decision (D1-D46), what I considered and why. Code comments cite these IDs.
+- [`docs/decisions.md`](docs/decisions.md): every design decision (D1-D47), what I considered and why. Code comments cite these IDs.
 - [How it works](#how-it-works) below, then the code: [`reconciler/core.py`](reconciler/core.py) is the heart of it.
 
 **CI:** every push runs the tests, lint and `cdk synth` in GitHub Actions ([infra](https://github.com/matthewcummings/preview-env-infra/actions), [service-a](https://github.com/matthewcummings/service-a/actions), [service-b](https://github.com/matthewcummings/service-b/actions)), and every deploy smoke-tests the live environment.
@@ -84,11 +84,11 @@ flowchart LR
 1. **Service CI** (in each service repo): lint, tests, a migration check (fails if two merged branches each added a database migration, leaving two parallel migration histories), and a Docker build. On `main` or `preview/*`, it builds an ARM64 image on a native ARM runner and pushes it, tagged with the full commit SHA and sends this repo an event (`repository_dispatch`). Deleting a `preview/*` branch also sends an event.
 2. **The reconciler** (this repo, [`reconciler/`](reconciler/)) works out the environment from scratch on every run:
    - **Desired state** comes from GitHub: which registered repos have a branch in this group.
-   - **Images** come from ECR, by commit SHA. A branch whose image isn't built yet runs `main` for now, and the plan says so.
+   - **Images** come from ECR, by commit SHA. If a branch's newest commit isn't built yet, its newest *built* commit runs for now (never a newer `main` the branch doesn't contain, which could clash with the branch's database migrations), and the plan says so. Details: D47.
    - **Actual state** comes from CloudFormation: does `preview-env-<group>` exist?
    - Then it creates, updates, or deletes the stack. It keeps no state of its own, so any event just means "go look again".
 3. **CDK** ([`infra/`](infra/)) builds each environment from one construct, used for `main` and every preview. The only difference is each service's database: in `main`, a service migrates and seeds its own database; in a preview, it copies `main`'s database once (when the environment is created), then applies the branch's migrations on top.
-4. **Each deploy runs a smoke test:** health, the expected commit SHA per service, a CRUD round trip, and (for previews) a check that data doesn't leak into `main`.
+4. **Each deploy runs a smoke test:** health (`/healthz`, `/readyz`: the Google/Kubernetes convention, where the trailing "z" keeps operational endpoints from clashing with application routes), the expected commit SHA per service, a CRUD round trip, and (for previews) a check that data doesn't leak into `main`.
 
 **Races:** each group maps to exactly one stack, and deploys for the same environment queue up (GitHub Actions `concurrency`). GitHub keeps only the newest waiting run per queue and drops older ones. That's safe here because every run recomputes the whole plan from GitHub and CloudFormation, so the newest run always covers everything (D24).
 
@@ -266,10 +266,13 @@ All targets: `make help`. What each GitHub Actions workflow does: [`docs/operati
 - A cap on concurrent previews.
 - Stale-branch warnings.
 - `cdk diff` on infra PRs.
+- **Faster preview updates** (today ~5 minutes from push to a smoke-tested update): run the service checks in parallel with the image build; merge the reconcile `plan` and `apply` jobs (one runner start instead of two); for previews, `cdk deploy --hotswap` when only the image changed (updates the ECS service directly instead of via CloudFormation, often under a minute; fine for throwaway environments, not for production); and a faster preview rollout (shorter health-check intervals, near-zero drain delay, stop the old task first). Goal: under 2 minutes.
+- A manual **"Tear down preview" workflow** in this repo, so developers without AWS access can remove a whole group's environment from GitHub (today: `make teardown GROUP=...`, which needs AWS access).
 - A `make tokens` helper: GitHub has no API for creating personal access tokens, so it would open the token page with the exact settings, read each token with hidden input, verify it, and hand it to `make setup-github`. (A GitHub App would remove the tokens entirely.)
 - A "reset preview data" workflow.
 
 **Production hardening** (out of scope here, but the obvious next steps):
+- **Stable DNS names:** `dev.example.com` for `main`, and `<group>.preview.example.com` for previews (one wildcard certificate, a DNS record created and deleted with each environment's stack). Predictable URLs (the PR comment could post the link before the environment even exists), HTTPS everywhere, and it makes a shared load balancer with one host-based rule per environment possible (cheaper at scale than one per environment, D10).
 - **Authentication:** with a domain, HTTPS plus authentication at the load balancer (OIDC via the ALB, or Cognito), instead of relying on the IP allowlist alone.
 - **Observability:** structured logs, metrics and traces (CloudWatch Container Insights, OpenTelemetry), with each environment's name as a dimension.
 - **Alerting:** on the shared Aurora cluster, failed deploys and smoke tests, and environment count/cost.
