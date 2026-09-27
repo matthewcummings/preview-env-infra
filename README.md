@@ -90,7 +90,7 @@ flowchart LR
 3. **CDK** ([`infra/`](infra/)) builds each environment from one construct, used for `main` and every preview. The only difference is each service's database: in `main`, a service migrates and seeds its own database; in a preview, it copies `main`'s database once (when the environment is created), then applies the branch's migrations on top.
 4. **Each deploy runs a smoke test:** health (`/healthz`, `/readyz`: the Google/Kubernetes convention, where the trailing "z" keeps operational endpoints from clashing with application routes), the expected commit SHA per service, a CRUD round trip, and (for previews) a check that data doesn't leak into `main`.
 
-**Races:** each group maps to exactly one stack, and deploys for the same environment queue up (GitHub Actions `concurrency`). GitHub keeps only the newest waiting run per queue and drops older ones. That's safe here because every run recomputes the whole plan from GitHub and CloudFormation, so the newest run always covers everything (D24).
+**Races:** each group maps to exactly one stack, and deploys for the same environment queue up (GitHub Actions `concurrency`). GitHub keeps only the newest waiting run per queue and drops older ones. That's safe here because every run recomputes the whole plan from GitHub and CloudFormation, so the newest run always covers everything (D24). A superseded waiting run shows up as *cancelled* in the Actions history; that's expected.
 
 ## Deployment guide
 
@@ -240,43 +240,64 @@ All targets: `make help`. What each GitHub Actions workflow does: [`docs/operati
 
 **Running cost:** roughly $4-5/day for the baseline and `main`, plus about $1.50/day per idle preview. Tear everything down when you're done (below).
 
-### Tearing everything down
+### Final cleanup (removing everything)
 
-<!-- TODO(matt): consider a `make destroy-all` target -->
+Day to day, previews clean themselves up: deleting or merging a group's branches tears its environment down, and `make teardown GROUP=...` handles a missed delete event. This section is for removing the whole platform when you're done with it.
 
-1. Delete every `preview/*` branch (or `make teardown GROUP=...` for each), then delete the `preview-env-main` stack.
-2. Delete the `preview-baseline` stack. Aurora takes a **final snapshot** on deletion; delete it from the RDS console to stop its (small) storage cost.
-3. Optionally delete the `CDKToolkit` stack and its S3 bucket.
+1. **Previews:** remove every remaining preview environment:
+   ```bash
+   aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
+     --query 'StackSummaries[?starts_with(StackName,`preview-env-`)].StackName' --output text
+   make teardown GROUP=<group>    # for each preview group listed (not main)
+   ```
+2. **`main`:** `make destroy-main CONFIRM=preview-env-main`
+3. **The baseline** (~10 minutes): `make destroy-baseline CONFIRM=preview-baseline`. This removes the VPC and NAT gateway, the ECS cluster, the ECR repositories (images included), the Aurora cluster, the OIDC roles and the IP allowlist. Aurora keeps a **final snapshot** on deletion; delete it to stop its (small) storage cost:
+   ```bash
+   aws rds describe-db-cluster-snapshots --snapshot-type manual \
+     --query 'DBClusterSnapshots[].DBClusterSnapshotIdentifier' --output text
+   aws rds delete-db-cluster-snapshot --db-cluster-snapshot-identifier <id>
+   ```
+4. **GitHub:** close any preview PRs and delete the `preview/*` branches; remove the Actions variables and secrets (without `AWS_ROLE_ARN` / `AWS_DEPLOY_ROLE_ARN` the deploy jobs switch back off); and revoke the two tokens at [github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens) (or let them expire).
+5. **CDK bootstrap (optional, harmless to keep):** delete the `CDKToolkit` stack. CDK deliberately keeps its assets S3 bucket (versioned, so empty it first, including old versions) and its container-assets ECR repository; delete those by hand.
 
 ## Security notes
 
-- **No long-lived AWS credentials anywhere.** GitHub Actions uses OIDC. Service repos can only push images to their own ECR repository. Only this repo's `main` branch can deploy, and only through CDK's bootstrap roles (D11, D32).
-- **The APIs have no authentication, so every load balancer is IP-allowlisted** through a shared managed prefix list. Nothing is open to the internet unless you add it. CI adds its runner's IP only for the smoke test and always removes it (D42).
-- **HTTP only, no TLS.** A certificate needs a domain; with one, I'd add HTTPS and authentication at the load balancer.
-- The database is IAM-auth only: no DB passwords in the apps (D16).
-- **Two narrowly scoped GitHub tokens**, one per job (signal the infra repo; comment on service-repo PRs), so neither can push code. Long term, both would be replaced by a GitHub App: one installable identity, no personal tokens.
+- **No long-lived AWS credentials.** GitHub Actions uses OIDC. Each service repo can only pull and push images in its own ECR repository. Only this repo's `main` branch can deploy, and only through CDK's bootstrap roles (D11, D32).
+- **IP allowlisting is ground-floor protection, not authentication.** The demo APIs have no authentication, and I didn't want live, unauthenticated CRUD endpoints open to the internet, so every load balancer only accepts traffic from IPs on a shared managed prefix list (D42). CI adds its runner's IP only for the smoke test and always removes it. In a real engineering setup these environments would sit behind real authentication, and likely be reachable only over a VPN.
+- **HTTP only, no TLS.** An HTTPS listener needs a certificate, and AWS only issues certificates for domains you control, not for a load balancer's generated `*.elb.amazonaws.com` name. The current tradeoff is that nothing sensitive crosses the wire: the APIs carry no credentials or sessions, only demo data, and the one real secret (each task's IAM login token for Aurora) travels over TLS inside the VPC. With a domain, I'd add HTTPS and authentication at the load balancer (see "Production hardening").
+- **Database:** IAM authentication only, so no database passwords in the apps (D16). Previews copy `main`'s data through a **read-only** database user, so a preview can't write to `main`'s database (D6, D40).
+- **Two narrowly scoped GitHub tokens**, one per job (signal this repo; comment on service-repo PRs), so neither can push code to the service repos. Long term, both would be replaced by a GitHub App: one installable identity, no personal tokens (D44).
+- **Known hardening gaps (documented, not fixed):**
+  - The dispatch token has Contents write on this repo, which is what `repository_dispatch` requires, so it could push to `main`. Branch protection or a ruleset on `main` (PRs required) closes that.
+  - The service repos' OIDC roles trust any ref of their repo. They could be narrowed to `main` and `preview/*`.
+  - The CI role's `DeleteStack` permission covers every `preview-env-*` stack, including `preview-env-main`. Only the reconciler's logic protects `main`; an IAM condition on the `preview-env:kind = preview` tag would enforce it.
 
 ## What's built, and what's next
 
-**Built:** the four prompt scenarios, teardown, per-environment databases copied from `main`, the queueing and races, IP allowlisting, smoke tests, preview URLs posted on PRs, and the setup tooling.
+**Built:** the four prompt scenarios, teardown, per-environment databases copied from `main`, the queueing and races, IP allowlisting, smoke tests, preview URLs posted on PRs, and the setup tooling. All four scenarios, a partial delete (one branch removed, the environment stays) and a full teardown have run live through the pipeline: see this repo's Actions history and [service-a PR #1](https://github.com/matthewcummings/service-a/pull/1).
 
 **Documented, not built** (D29 in [`docs/decisions.md`](docs/decisions.md)):
+
+*Operations*
 - A nightly sweep and age limit for forgotten environments.
-- Reconciling every environment when `main` moves (today, previews pick up new `main` images on their next push).
+- Reconciling every environment when `main` moves (today, previews pick up new `main` images on their next push or a manual reconcile).
 - A cap on concurrent previews.
-- Stale-branch warnings.
-- `cdk diff` on infra PRs.
-- **Faster preview updates** (today ~5 minutes from push to a smoke-tested update): run the service checks in parallel with the image build; merge the reconcile `plan` and `apply` jobs (one runner start instead of two); for previews, `cdk deploy --hotswap` when only the image changed (updates the ECS service directly instead of via CloudFormation, often under a minute; fine for throwaway environments, not for production); and a faster preview rollout (shorter health-check intervals, near-zero drain delay, stop the old task first). Goal: under 2 minutes.
-- A manual **"Tear down preview" workflow** in this repo, so developers without AWS access can remove a whole group's environment from GitHub (today: `make teardown GROUP=...`, which needs AWS access).
-- A `make tokens` helper: GitHub has no API for creating personal access tokens, so it would open the token page with the exact settings, read each token with hidden input, verify it, and hand it to `make setup-github`. (A GitHub App would remove the tokens entirely.)
-- A "reset preview data" workflow.
+- Stale-branch warnings in the plan output.
+- A single `make destroy-all` that runs the whole final cleanup in order.
+
+*Developer experience*
+- **Faster preview updates:** ~5 minutes today from push to a smoke-tested update; under 2 minutes with parallel CI checks, one reconcile job instead of two, `cdk deploy --hotswap` for image-only preview updates, and a faster preview rollout (shorter health checks, near-zero drain delay). Hotswap bypasses CloudFormation, which is fine for throwaway previews, not for production.
+- A **"Tear down preview"** workflow, so developers without AWS access can remove a group's environment from GitHub (today: `make teardown`, which needs AWS access).
+- A **"Reset preview data"** workflow: re-copy `main`'s data into a preview without deleting its branches.
+- A `make tokens` helper: GitHub has no API for creating personal access tokens, so it would open the token page with the exact settings, read each token with hidden input, verify it, and pass it to `make setup-github`.
+- `cdk diff` posted on infra PRs.
+- AI code review on pull requests in all three repos (e.g. CodeRabbit or Greptile), alongside the existing tests and lint.
 
 **Production hardening** (out of scope here, but the obvious next steps):
-- **Stable DNS names:** `dev.example.com` for `main`, and `<group>.preview.example.com` for previews (one wildcard certificate, a DNS record created and deleted with each environment's stack). Predictable URLs (the PR comment could post the link before the environment even exists), HTTPS everywhere, and it makes a shared load balancer with one host-based rule per environment possible (cheaper at scale than one per environment, D10).
-- **Authentication:** with a domain, HTTPS plus authentication at the load balancer (OIDC via the ALB, or Cognito), instead of relying on the IP allowlist alone.
+- **DNS, HTTPS and authentication:** `dev.example.com` for `main` and `<group>.preview.example.com` for previews (one wildcard certificate; a DNS record created and deleted with each environment's stack). That gives predictable URLs (the PR comment could post the link before the environment exists), HTTPS everywhere, authentication at the load balancer (OIDC or Cognito) instead of relying on the IP allowlist, and it makes a shared load balancer with one host-based rule per environment possible (cheaper at scale than one per environment, D10).
+- **The known security gaps** listed under [Security notes](#security-notes), plus pinning GitHub's immutable IDs in the OIDC trust (the roles accept `repo:owner@<id>/repo@<id>:...` with the IDs as wildcards; pinning them would stop a deleted and re-created repo with the same name from inheriting the trust).
 - **Observability:** structured logs, metrics and traces (CloudWatch Container Insights, OpenTelemetry), with each environment's name as a dimension.
 - **Alerting:** on the shared Aurora cluster, failed deploys and smoke tests, and environment count/cost.
-- **Pin GitHub's immutable IDs in the OIDC trust:** GitHub now sends the OIDC subject as `repo:owner@<owner id>/repo@<repo id>:...`. The roles accept it with the IDs as wildcards (and the classic format); pinning the real IDs would stop a deleted and re-created repo with the same name from inheriting the trust.
 - **Cost visibility:** every stack is already tagged with its environment (`preview-env:env`), so per-environment cost shows up once the tags are activated for cost allocation.
 
 **Scaling past a handful of services:** every preview runs every service, so databases and connections grow with environments x services. The fix, in order: smaller pools (done), **partial environments** (deploy only the services that changed and route the rest to `main`), RDS Proxy, then a cluster per service (D41).
@@ -291,9 +312,11 @@ All targets: `make help`. What each GitHub Actions workflow does: [`docs/operati
 |---|---|
 | `reconciler/` | The reconciler: pure core (`core.py`, `branches.py`), adapters for GitHub/ECR/CloudFormation/CDK, CLI. |
 | `infra/` | CDK: `preview-baseline` (`shared_stack.py`), the environment construct (`environment.py`), the database component (`database.py`), preview databases via the RDS Data API (`preview_db.py`, `data_api.py`), GitHub OIDC (`github_oidc.py`). |
-| `scripts/` | Setup and operations: `deploy_baseline.py`, `setup_github.py`, `smoke_test.py`, `allow_ip.py`, `doctor.py`. |
+| `scripts/` | Setup and operations: `doctor.py`, `deploy_baseline.py`, `setup_github.py`, `smoke_test.py`, `pr_comment.py`, `env_url.py`, `allow_ip.py`. |
 | `services.yaml` | The service registry: adding a service is one entry here (D25). |
-| `.github/workflows/` | `ci.yml` (PR checks), `platform.yml` (deploy on `main`), `reconcile.yml` (previews). |
+| `.github/workflows/` | `ci.yml` (checks on PRs and branches), `platform.yml` (deploy the baseline and `main` on merge to `main`), `reconcile.yml` (create, update or tear down one environment per signal). |
+| `docs/` | `decisions.md` (every design decision, D1-D47) and `operations.md` (every `make` target and workflow). |
+| `prompt.md` | The original take-home prompt. |
 | `tests/` | Reconciler, CDK assertion and script tests. |
 
 ## Development
@@ -313,7 +336,10 @@ In each service repo, `uv run pytest` runs the app's tests against a throwaway P
 - **Preview environment:** a temporary, isolated copy of the system for one feature group. Also known as *review apps* (GitLab, Heroku) or *preview deployments* (Vercel, Render).
 - **Feature group:** the `<group>` in `preview/<group>/...`. Branches in different repos with the same group share one environment.
 - **`main` environment:** the shared dev environment, running every service's `main`.
+- **Baseline:** the long-lived shared stack (`preview-baseline`) every environment builds on: VPC, ECS cluster, ECR repositories, the Aurora cluster, GitHub OIDC roles.
+- **Reconciler:** the small Python program that works out what an environment should run (from GitHub and ECR), compares it with what exists (CloudFormation), and makes them match.
 
 ## How this was built
 
-<!-- TODO(matt): write this section in my own words (tools list + AI use). Draft material: notes 05-tools.md -->
+<!-- TODO(matt): DRAFT, rewrite in my own words -->
+I built this over about 24 hours on Ubuntu 24.04, with Python 3.14 (managed by uv), the AWS CDK, and GitHub Actions. I used Claude Code (Anthropic's Opus 5.5) as a pair programmer: it proposed options and tradeoffs and wrote much of the code and documentation, while I made or approved every design decision and overruled it where I disagreed (for example, how to read "shared database", and dropping extra endpoints the services didn't need). The decisions log (`docs/decisions.md`) records the reasoning. Tests, lint, a scripted setup check (`make doctor`) and a live end-to-end run of every setup step and prompt scenario verify the result, and the live run surfaced (and I fixed) three real issues along the way.

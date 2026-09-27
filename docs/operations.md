@@ -25,6 +25,8 @@ Names used below: the baseline stack is `preview-baseline` (SSM parameters under
 | `make url ENV=<env>` | Prints an env's URL (its stack's `Url` output). Needs AWS access. |
 | `make smoke ENV=<env> [SPEC=envspec.json]` | Smoke test (D34): health, readiness, CRUD round trip, and for previews an isolation check against `main`. With `SPEC`, also checks each service runs the planned commit. Your IP must be on the allowlist. |
 | `make teardown GROUP=<group>` | Deletes a preview's stack now with CloudFormation `DeleteStack` (D35), even if its branches still exist (the next push recreates it). For a missed delete event. Never `main`. |
+| `make destroy-main CONFIRM=preview-env-main` | Final cleanup only: deletes the `main` environment's stack. Refuses without the exact `CONFIRM` value. |
+| `make destroy-baseline CONFIRM=preview-baseline` | Final cleanup only, after every environment is gone: deletes `preview-baseline` (VPC, Aurora, ECR, OIDC roles). Aurora leaves a final snapshot to delete by hand. Refuses without the exact `CONFIRM` value. |
 | `make allow-ip [CIDR=...]` / `make disallow-ip [CIDR=...]` / `make list-ips` | Manage the ALB allowlist (D42). Default: your current public IP as a /32. |
 
 ### Development

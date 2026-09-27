@@ -3,6 +3,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help test lint synth doctor bootstrap deploy-baseline setup-github deploy-main \
+	destroy-main destroy-baseline \
 	preview plan teardown smoke url allow-ip disallow-ip list-ips
 
 RECONCILE := uv run python -m reconciler
@@ -61,6 +62,18 @@ smoke: ## Smoke-test ENV=... (SPEC=envspec.json also checks the deployed SHAs)
 
 url: ## Print an environment's URL (needs AWS access)
 	uv run python scripts/env_url.py $(ENV)
+
+destroy-main: ## Final cleanup: delete the main env stack (needs CONFIRM=preview-env-main)
+	@test "$(CONFIRM)" = "preview-env-main" || { echo "Refusing: this deletes the main environment. Rerun with CONFIRM=preview-env-main"; exit 1; }
+	aws cloudformation delete-stack --stack-name preview-env-main
+	aws cloudformation wait stack-delete-complete --stack-name preview-env-main
+	@echo "preview-env-main deleted."
+
+destroy-baseline: ## Final cleanup: delete preview-baseline, after all envs (needs CONFIRM=preview-baseline)
+	@test "$(CONFIRM)" = "preview-baseline" || { echo "Refusing: this deletes the shared baseline (VPC, Aurora, ECR). Rerun with CONFIRM=preview-baseline"; exit 1; }
+	aws cloudformation delete-stack --stack-name preview-baseline
+	aws cloudformation wait stack-delete-complete --stack-name preview-baseline
+	@echo "preview-baseline deleted. Aurora left a final snapshot: see README 'Final cleanup'."
 
 allow-ip: ## Allow your public IP (or CIDR=...) through every env's ALB
 	uv run python scripts/allow_ip.py add $(CIDR_FLAG)
