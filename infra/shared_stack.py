@@ -1,7 +1,7 @@
-"""`pe-shared`: the long-lived baseline every environment builds on.
+"""`preview-baseline`: the long-lived baseline every environment builds on.
 
 VPC, ECS cluster, one ECR repo per registered service, main's Aurora cluster (+ bootstrap),
-GitHub OIDC roles. Values env stacks need are published to SSM under /pe/shared/ (D24).
+GitHub OIDC roles. Values env stacks need are published to SSM under /preview-baseline/ (D24).
 """
 
 from aws_cdk import Duration, Fn, RemovalPolicy, Stack, Token
@@ -30,7 +30,7 @@ AURORA_MIN_ACU = 0.5  # D13: never pauses, so reviewers never hit a cold start
 # preview ceiling (D10). Idle cost is set by the min ACU, not the max.
 # Source: Aurora User Guide, "Maximum connections for Aurora Serverless v2".
 AURORA_MAX_ACU = 8
-AURORA_ADMIN_USER = "pe_admin"
+AURORA_ADMIN_USER = "preview_env_admin"
 
 
 class SharedStack(Stack):
@@ -147,7 +147,7 @@ class SharedStack(Stack):
         # this resource, and an update reconciles the entries to the template, i.e. would
         # drop every script-added entry (or fail, with Entries absent). Deploys that don't
         # change this resource leave the entries alone. So keep its properties fixed: no
-        # tags, a fixed name, and don't change pe-shared's stack-level tags (they propagate
+        # tags, a fixed name, and don't change preview-baseline's stack-level tags (they propagate
         # to resources and would trigger an update). MaxEntries can't be updated at all.
         # L1 on purpose: the L2 `ec2.PrefixList` always renders `Entries: []`.
         self.alb_allowlist = ec2.CfnPrefixList(
@@ -194,7 +194,7 @@ class SharedStack(Stack):
         for name, value in values.items():
             ssm.StringParameter(
                 self,
-                "Param" + name.removeprefix("/pe/shared").replace("/", "-"),
+                "Param" + name.removeprefix("/preview-baseline").replace("/", "-"),
                 parameter_name=name,
                 string_value=value,
             )

@@ -3,6 +3,7 @@ import json
 import pytest
 from aws_cdk.assertions import Template
 
+from infra.config import SsmKeys
 from infra.env_stack import EnvStack
 from infra.environment import image_tag_or_digest
 from reconciler.spec import EnvSpec
@@ -141,17 +142,25 @@ def test_task_security_group_only_allows_the_alb(any_template, registry):
         assert rule["FromPort"] == rule["ToPort"] == svc.port
 
 
+def _ssm_param_id(key: str) -> str:
+    """The logical-ID prefix CDK gives a deploy-time SSM lookup: the path, alphanumerics only.
+
+    Derived from the key, so renaming the SSM paths can't leave these tests stale.
+    """
+    return "SsmParameterValue" + "".join(c for c in key if c.isalnum())
+
+
 def test_alb_accepts_http_only_from_the_allowlist_prefix_list(any_template):
     """D42: no 0.0.0.0/0 anywhere; port 80 only from the SSM-provided prefix list."""
     (rule,) = _ingress_into(any_template, "EnvAlbSg")
     assert rule["FromPort"] == rule["ToPort"] == 80
     assert rule["SourcePrefixListId"]["Ref"].startswith(
-        "SsmParameterValuepesharedalballowlistprefixlistid"
+        _ssm_param_id(SsmKeys.ALB_ALLOWLIST_PREFIX_LIST_ID)
     )
     raw = any_template.to_json()
     params = raw["Parameters"]
     assert params[rule["SourcePrefixListId"]["Ref"]]["Default"] == (
-        "/pe/shared/alb-allowlist-prefix-list-id"
+        "/preview-baseline/alb-allowlist-prefix-list-id"
     )
     for sg in any_template.find_resources("AWS::EC2::SecurityGroup").values():
         for inbound in sg["Properties"].get("SecurityGroupIngress", []):
@@ -177,8 +186,8 @@ def test_shared_values_come_from_ssm_not_exports(any_template):
         for p in raw["Parameters"].values()
         if p["Type"] == "AWS::SSM::Parameter::Value<String>"
     ]
-    assert "/pe/shared/vpc-id" in ssm_params
-    assert "/pe/shared/db-endpoint" in ssm_params
+    assert "/preview-baseline/vpc-id" in ssm_params
+    assert "/preview-baseline/db-endpoint" in ssm_params
 
 
 def test_outputs_the_env_url(any_template):
@@ -248,7 +257,7 @@ def test_main_task_role_connects_as_its_own_user_only(main_template, registry):
 
 
 def test_main_creates_no_databases(main_template):
-    # main's databases come from the pe-shared bootstrap and are never dropped by an env.
+    # main's databases come from the preview-baseline bootstrap and are never dropped by an env.
     main_template.resource_count_is("Custom::AWS", 0)
 
 
@@ -327,9 +336,9 @@ def test_preview_delete_order_is_service_then_database_then_role(preview_templat
 def test_preview_data_api_role_is_scoped_to_cluster_and_admin_secret(preview_template):
     text = json.dumps(preview_template.find_resources("AWS::IAM::Policy"))
     assert "rds-data:ExecuteStatement" in text
-    assert "SsmParameterValuepeshareddbclusterarn" in text
+    assert _ssm_param_id(SsmKeys.DB_CLUSTER_ARN) in text
     assert "secretsmanager:GetSecretValue" in text
-    assert "SsmParameterValuepeshareddbadminsecretarn" in text
+    assert _ssm_param_id(SsmKeys.DB_ADMIN_SECRET_ARN) in text
 
 
 def test_preview_runs_one_task_per_service(preview_template):
@@ -370,7 +379,7 @@ def test_spec_must_cover_every_registered_service(registry):
     spec = make_spec(registry, "checkout")
     partial = EnvSpec(env="checkout", services=dict(list(spec.services.items())[:1]))
     with pytest.raises(ValueError, match="doesn't match the registry"):
-        EnvStack(new_app(), "pe-env-checkout", spec=partial, registry=registry)
+        EnvStack(new_app(), "preview-env-checkout", spec=partial, registry=registry)
 
 
 def test_invalid_env_name_is_rejected(registry):

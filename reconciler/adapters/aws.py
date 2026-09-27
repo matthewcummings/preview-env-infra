@@ -58,7 +58,7 @@ class EcrImages:
             if code == "RepositoryNotFoundException":
                 raise ReconcileError(
                     f"ECR repository '{repository}' not found in {self.region}. "
-                    "Is the pe-shared stack deployed in this account and region?"
+                    "Is the preview-baseline stack deployed in this account and region?"
                 ) from err
             raise
         detail = response["imageDetails"][0]

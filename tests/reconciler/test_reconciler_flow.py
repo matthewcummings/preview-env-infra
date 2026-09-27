@@ -20,7 +20,7 @@ from reconciler.cli import Adapters, main
 from reconciler.core import Action, Branch
 from reconciler.ports import ReconcileError
 from reconciler.reconcile import apply_plan, build_plan
-from reconciler.spec import ServiceSpec
+from reconciler.spec import EnvSpec, ServiceSpec
 
 
 def plan(target, github, ecr=None, stacks=None):
@@ -340,3 +340,58 @@ def test_cli_github_output_on_error(registry_file, tmp_path):
     )
     assert code == 1
     assert read_outputs(out) == {"env": "x", "action": "error"}
+
+
+# --- --spec-out and teardown ----------------------------------------------------------------
+
+
+def test_cli_apply_spec_out_keeps_the_deployed_spec(registry_file, tmp_path):
+    spec_out = tmp_path / "envspec.json"
+    deployer = FakeDeployer()
+    code = main(
+        [
+            "apply",
+            "--group",
+            "checkout",
+            "--registry",
+            str(registry_file),
+            "--spec-out",
+            str(spec_out),
+        ],
+        adapters=fake_factory(
+            FakeGitHub({"service-a": [Branch("preview/checkout", A_FEAT)]}), deployer=deployer
+        ),
+    )
+    assert code == 0
+    [(_, _, deployed)] = deployer.calls
+    assert EnvSpec.read(spec_out) == deployed
+    assert deployed.services["service-a"].sha == A_FEAT
+
+
+def test_cli_teardown_deletes_even_with_branches_and_warns(registry_file, tmp_path, capsys):
+    out = tmp_path / "gh_output"
+    deployer = FakeDeployer()
+    code = main(
+        [
+            "teardown",
+            "--group",
+            "checkout",
+            "--registry",
+            str(registry_file),
+            "--github-output",
+            str(out),
+        ],
+        adapters=fake_factory(
+            FakeGitHub({"service-a": [Branch("preview/checkout", A_FEAT)]}), deployer=deployer
+        ),
+    )
+    assert code == 0
+    assert deployer.calls == [("delete", "checkout", None)]
+    assert "WARNING: group 'checkout' still has preview branches" in capsys.readouterr().out
+    assert read_outputs(out) == {"env": "checkout", "action": "destroy"}
+
+
+def test_cli_teardown_needs_a_group(registry_file):
+    with pytest.raises(SystemExit) as exc:
+        main(["teardown", "--env", "main", "--registry", str(registry_file)])
+    assert exc.value.code == 2

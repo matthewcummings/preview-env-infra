@@ -1,0 +1,46 @@
+# Checks for the infra repo (D38): lint, tests, and a credential-free `cdk synth`.
+# Runs on PRs and on pushes to branches other than main; on main, platform.yml calls this
+# same workflow as its first job, so it isn't run twice.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0  # no floating major tag exists for this action
+        with:
+          version: "0.12.19"
+          enable-cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          uv sync --locked
+          npm ci
+
+      - name: Lint
+        run: |
+          uv run ruff check
+          uv run ruff format --check
+
+      - name: Tests
+        run: uv run pytest
+
+      # No AWS credentials in this job: synth must work without them (D1 tier 1).
+      - name: cdk synth
+        run: npx cdk synth -q

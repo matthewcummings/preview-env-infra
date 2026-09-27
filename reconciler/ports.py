@@ -31,7 +31,7 @@ class ImageRegistry(Protocol):
 
 class StackInventory(Protocol):
     def env_stacks(self) -> dict[str, str]:
-        """Existing `pe-env-*` stacks as {env: status}. Deleted stacks are not included."""
+        """Existing `preview-env-*` stacks as {env: status}. Deleted stacks are not included."""
         ...
 
     def outputs(self, env: str) -> dict[str, str]:
@@ -41,11 +41,11 @@ class StackInventory(Protocol):
 
 class Deployer(Protocol):
     def deploy(self, env: str, spec_path: Path) -> None:
-        """Create or update pe-env-<env> from the EnvSpec at `spec_path` (`cdk deploy`)."""
+        """Create or update preview-env-<env> from the EnvSpec at `spec_path` (`cdk deploy`)."""
         ...
 
 
 class StackDeleter(Protocol):
     def delete(self, env: str) -> None:
-        """Delete pe-env-<env> and wait until it is gone (D35). Needs no EnvSpec."""
+        """Delete preview-env-<env> and wait until it is gone (D35). Needs no EnvSpec."""
         ...

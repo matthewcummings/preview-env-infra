@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """CDK entry point.
 
-    npx cdk synth                                  # pe-shared + pe-env-sample (built-in spec)
-    npx cdk deploy pe-shared [-c githubOidcProvider=existing]
-    npx cdk deploy pe-env-<env> -c envSpec=<file>  # what the reconciler runs
+    npx cdk synth       # preview-baseline + preview-env-sample (built-in spec)
+    npx cdk deploy preview-baseline [-c githubOidcProvider=existing]
+    npx cdk deploy preview-env-<env> -c envSpec=<file>  # what the reconciler runs
 
 Stacks are account-agnostic and need no lookups, so `cdk synth` works without AWS
 credentials (D1 tier 1). The region comes from the CDK CLI's AWS config, else us-east-1

@@ -1,13 +1,16 @@
 """Constants shared by the shared stack and the env stacks.
 
 Anything both sides must agree on (SSM keys, AZ count, names) lives here, so the writer
-(`pe-shared`) and the readers (`pe-env-*`) can't drift apart.
+(`preview-baseline`) and the readers (`preview-env-*`) can't drift apart.
 """
 
 import re
 
-PREFIX = "pe"
-SHARED_STACK_NAME = f"{PREFIX}-shared"
+# The shared baseline stack and the per-env stacks deliberately use different prefixes, so
+# nothing that matches env stacks by prefix (the reconciler's env list, the CI role's
+# DeleteStack permission) can ever match the shared stack.
+SHARED_STACK_NAME = "preview-baseline"
+ENV_STACK_PREFIX = "preview-env-"
 MAIN_ENV = "main"
 
 # Region used when neither the CDK CLI nor the environment says otherwise (D20).
@@ -24,7 +27,7 @@ ENV_NAME_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$")
 
 # D42: the prefix list every env's ALB accepts HTTP from. Entries are managed by
 # scripts/allow_ip.py, never by CloudFormation (see shared_stack.py).
-ALB_ALLOWLIST_NAME = f"{PREFIX}-alb-allowlist"
+ALB_ALLOWLIST_NAME = f"{SHARED_STACK_NAME}-alb-allowlist"
 ALB_ALLOWLIST_MAX_ENTRIES = 20
 
 # Default GitHub repo name of this (infra) repo; override with `-c infraRepo=<name>`.
@@ -38,7 +41,7 @@ ECR_EXPIRE_OTHER_IMAGES_DAYS = 14
 
 
 def env_stack_name(env: str) -> str:
-    return f"{PREFIX}-env-{env}"
+    return f"{ENV_STACK_PREFIX}{env}"
 
 
 def validate_env_name(env: str) -> None:
@@ -49,14 +52,14 @@ def validate_env_name(env: str) -> None:
 
 
 class SsmKeys:
-    """SSM parameter names published by `pe-shared` and read by `pe-env-*` (D24).
+    """SSM parameter names published by `preview-baseline` and read by `preview-env-*` (D24).
 
     SSM instead of CloudFormation exports: an export can't change while another stack
     imports it, which would freeze the shared stack; SSM parameters also resolve at deploy
     time, so `cdk synth` needs no AWS credentials.
     """
 
-    _BASE = f"/{PREFIX}/shared"
+    _BASE = f"/{SHARED_STACK_NAME}"
 
     VPC_ID = f"{_BASE}/vpc-id"
     AVAILABILITY_ZONES = f"{_BASE}/availability-zones"  # comma-separated, AZ_COUNT items

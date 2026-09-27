@@ -38,7 +38,7 @@ def synth_shared(registry: Registry, *, create_oidc_provider: bool = True) -> Te
     app = new_app()
     stack = SharedStack(
         app,
-        "pe-shared",
+        "preview-baseline",
         registry=registry,
         infra_repo="infra-repo",
         create_oidc_provider=create_oidc_provider,
@@ -49,5 +49,5 @@ def synth_shared(registry: Registry, *, create_oidc_provider: bool = True) -> Te
 
 def synth_env(registry: Registry, spec: EnvSpec) -> Template:
     app = new_app()
-    stack = EnvStack(app, f"pe-env-{spec.env}", spec=spec, registry=registry, env=REGION)
+    stack = EnvStack(app, f"preview-env-{spec.env}", spec=spec, registry=registry, env=REGION)
     return Template.from_stack(stack)

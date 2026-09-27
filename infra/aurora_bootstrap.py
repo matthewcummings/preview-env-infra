@@ -1,4 +1,4 @@
-"""Aurora bootstrap in `pe-shared`: main's per-service roles and databases (Data API).
+"""Aurora bootstrap in `preview-baseline`: main's per-service roles and databases (Data API).
 
 Per service (contract "Aurora bootstrap"; D12, D16, D18):
 - `service_x`: LOGIN, rds_iam (IAM auth only, no password), owns database `service_x`.
@@ -61,7 +61,7 @@ def bootstrap_steps(service: Service) -> list[SqlStep]:
             ),
         ),
         # No delete SQL anywhere: removing a service from the registry (or deleting
-        # pe-shared) must not drop main's data. Drop it by hand if that's really intended.
+        # preview-baseline) must not drop main's data. Drop it by hand if that's really intended.
     ]
 
 

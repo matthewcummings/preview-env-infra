@@ -16,7 +16,7 @@ from reconciler.branches import MAIN_BRANCH, PREVIEW_PREFIX, Group, parse_branch
 from reconciler.registry import Registry
 from reconciler.spec import EnvSpec, ServiceSpec
 
-STACK_PREFIX = "pe-env-"
+STACK_PREFIX = "preview-env-"
 MAIN_ENV = "main"
 
 

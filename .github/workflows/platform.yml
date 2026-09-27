@@ -1,0 +1,117 @@
+# Merge to main -> deploy the platform (D38): checks, then preview-baseline, then the main env,
+# then smoke-test main (D34). Only main may assume the deploy role (OIDC trust, D11).
+name: Platform
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  deploy-baseline:
+    needs: check
+    # Skipped until the repo is wired to AWS (`make setup-github` sets AWS_DEPLOY_ROLE_ARN),
+    # so a fresh fork runs the checks without failing on missing credentials.
+    if: vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-24.04
+    # One preview-baseline deploy at a time; a newer one waits instead of cancelling a deploy.
+    concurrency:
+      group: preview-baseline
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write  # OIDC: exchange the GitHub token for short-lived AWS credentials
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: "0.12.19"
+          enable-cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          uv sync --locked
+          npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # Reuses the account's GitHub OIDC provider if preview-baseline imported it (D39).
+      - name: Deploy preview-baseline
+        run: uv run python scripts/deploy_baseline.py
+
+  deploy-main:
+    needs: deploy-baseline
+    runs-on: ubuntu-24.04
+    # Same queue as reconcile.yml's runs for the main env: one change to an env at a time.
+    concurrency:
+      group: preview-env-main
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GITHUB_TOKEN: ${{ github.token }}  # GitHub API reads without the 60/h anonymous limit
+      PE_GITHUB_OWNER: ${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: "0.12.19"
+          enable-cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          uv sync --locked
+          npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Reconcile main
+        id: apply
+        run: >-
+          uv run python -m reconciler apply --env main
+          --spec-out envspec.json
+          --github-output "$GITHUB_OUTPUT"
+          --summary-file "$GITHUB_STEP_SUMMARY"
+
+      # The ALBs only accept allowlisted IPs (D42): let this runner in for the smoke test,
+      # and always take it out again, even if the smoke test fails.
+      - name: Allow this runner's IP
+        id: runner-ip
+        run: |
+          ip="$(curl -fsS https://checkip.amazonaws.com)"
+          echo "cidr=${ip}/32" >> "$GITHUB_OUTPUT"
+          uv run python scripts/allow_ip.py add --cidr "${ip}/32"
+
+      - name: Smoke test main
+        run: uv run python scripts/smoke_test.py main --spec envspec.json
+
+      - name: Remove this runner's IP
+        if: always() && steps.runner-ip.outputs.cidr != ''
+        env:
+          CIDR: ${{ steps.runner-ip.outputs.cidr }}
+        run: uv run python scripts/allow_ip.py remove --cidr "$CIDR"

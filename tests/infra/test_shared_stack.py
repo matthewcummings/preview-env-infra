@@ -139,6 +139,9 @@ def test_infra_role_deploys_only_via_cdk_bootstrap_roles(template, registry):
         "sts:AssumeRole",
         "cloudformation:ListStacks",
         "cloudformation:DescribeStacks",
+        "cloudformation:DeleteStack",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:ListStackResources",
         "ecr:DescribeImages",
         "ssm:GetParameter",
         "ssm:GetParameters",
@@ -249,7 +252,7 @@ def test_alb_allowlist_prefix_list_has_no_entries(template):
     assert prefix_list["Properties"] == {
         "AddressFamily": "IPv4",
         "MaxEntries": 20,
-        "PrefixListName": "pe-alb-allowlist",
+        "PrefixListName": "preview-baseline-alb-allowlist",
     }
     template.has_resource_properties(
         "AWS::SSM::Parameter",

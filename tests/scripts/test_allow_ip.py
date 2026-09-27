@@ -142,7 +142,7 @@ def test_prefix_list_id_comes_from_ssm(ec2):
         stubber.add_response(
             "get_parameter",
             {"Parameter": {"Name": SsmKeys.ALB_ALLOWLIST_PREFIX_LIST_ID, "Value": PL}},
-            {"Name": "/pe/shared/alb-allowlist-prefix-list-id"},
+            {"Name": "/preview-baseline/alb-allowlist-prefix-list-id"},
         )
         assert Allowlist.from_ssm(ssm, ec2).prefix_list_id == PL
 

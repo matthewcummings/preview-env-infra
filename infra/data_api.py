@@ -4,7 +4,7 @@ Each step is a CDK `AwsCustomResource` calling `rds-data:ExecuteStatement` with 
 secret. No Lambda code of our own and no VPC networking: the Data API is an HTTPS endpoint,
 so this works even though Aurora sits in isolated subnets.
 
-Used by `pe-shared` (main's per-service roles and databases) and by every preview env stack
+Used by `preview-baseline` (main's per-service roles and databases) and by every preview env stack
 (the env's own databases, created with the stack and dropped with it; D40).
 
 Each Data API call runs one statement in autocommit mode. `CREATE DATABASE` and

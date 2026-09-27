@@ -1,13 +1,13 @@
-"""What an env stack needs from `pe-shared`, read from SSM at deploy time (D24).
+"""What an env stack needs from `preview-baseline`, read from SSM at deploy time (D24).
 
 `ssm.StringParameter.value_for_string_parameter` becomes a CloudFormation parameter of type
 `AWS::SSM::Parameter::Value<String>`: CloudFormation resolves it during deploy, so synth
-does no lookups and needs no AWS credentials, and there is no export locking `pe-shared`.
+does no lookups and needs no AWS credentials, and there is no export locking `preview-baseline`.
 
 The sharp edge: those values are opaque tokens at synth time, and constructs like
 `Vpc.from_vpc_attributes` need *lists* (AZs, subnet IDs) whose length they know. We store
 each list as one comma-separated string and split it with `Fn.split(..., assumed_length)`,
-which yields exactly AZ_COUNT `Fn::Select` tokens. `pe-shared` asserts the same AZ_COUNT
+which yields exactly AZ_COUNT `Fn::Select` tokens. `preview-baseline` asserts the same AZ_COUNT
 when it writes the lists, so both sides agree by construction.
 """
 
@@ -77,7 +77,7 @@ class SharedRefs:
             scope,
             "SharedDbClientSg",
             value(SsmKeys.DB_CLIENT_SECURITY_GROUP_ID),
-            # Owned by pe-shared: env stacks must not add rules to it (D24).
+            # Owned by preview-baseline: env stacks must not add rules to it (D24).
             mutable=False,
         )
         return cls(

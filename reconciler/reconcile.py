@@ -11,6 +11,7 @@ from pathlib import Path
 from reconciler.branches import PREVIEW_PREFIX, Group, Main
 from reconciler.core import (
     Action,
+    Branch,
     EnvPlan,
     ImageLookup,
     Plan,
@@ -46,9 +47,7 @@ def build_plan(
     if isinstance(target, Main):
         desired = main_env(registry)
     else:
-        prefix = f"{PREVIEW_PREFIX}{target.name}"
-        branches = {s.name: github.branches(s.repo, prefix) for s in registry.services}
-        desired = desired_env(target.name, registry, branches)
+        desired = desired_env(target.name, registry, list_branches(target.name, registry, github))
 
     main_commits = {}
     if isinstance(desired, EnvPlan):
@@ -70,6 +69,12 @@ def build_plan(
     )
 
 
+def list_branches(group: str, registry: Registry, github: BranchSource) -> dict[str, list[Branch]]:
+    """Each service's branches that might belong to `group` (the core does exact matching)."""
+    prefix = f"{PREVIEW_PREFIX}{group}"
+    return {s.name: github.branches(s.repo, prefix) for s in registry.services}
+
+
 def _image_lookup(images: ImageRegistry | None) -> ImageLookup | None:
     if images is None:
         return None
@@ -82,9 +87,13 @@ def apply_plan(
     *,
     deployer: Deployer,
     deleter: StackDeleter,
+    spec_out: Path | None = None,
     log: Callable[[str], None] = print,
 ) -> Action:
     """Execute the plan's action. Refuses plans with errors (conflict, missing images, ...).
+
+    `spec_out`: also keep the deployed EnvSpec there, so the smoke test (D34) can check
+    that each service reports exactly the SHA that was deployed.
 
     Deletes go straight to CloudFormation (D35): no EnvSpec, no image lookups, no synth,
     so teardown cannot fail because of an image or ECR problem.
@@ -104,8 +113,8 @@ def apply_plan(
     if action in (Action.CREATE, Action.UPDATE, Action.DELETE_THEN_CREATE):
         assert plan.resolved is not None  # an EnvPlan always has a resolution
         spec = plan.resolved.to_env_spec()
-        with tempfile.TemporaryDirectory(prefix="pe-envspec-") as tmp:
-            spec_path = Path(tmp) / f"envspec-{plan.env}.json"
+        with tempfile.TemporaryDirectory(prefix="preview-envspec-") as tmp:
+            spec_path = spec_out or Path(tmp) / f"envspec-{plan.env}.json"
             spec.write(spec_path)
             log(f"EnvSpec ({spec_path}):\n{spec.to_json()}")
             deployer.deploy(plan.env, spec_path)

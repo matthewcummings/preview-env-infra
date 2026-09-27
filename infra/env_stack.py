@@ -1,4 +1,4 @@
-"""`pe-env-<env>`: one environment, built from an EnvSpec (resolved by the reconciler, D8).
+"""`preview-env-<env>`: one environment, built from an EnvSpec (resolved by the reconciler, D8).
 
 CDK decides nothing here: the spec says which image each service runs. The only choice
 made in this file is which database component the env gets (D4, D40).
@@ -27,9 +27,9 @@ class EnvStack(Stack):
             **kwargs,
         )
         is_main = spec.env == config.MAIN_ENV
-        # Tags on every resource; `pe:kind` lets tooling tell previews from main (D21).
-        Tags.of(self).add("pe:env", spec.env)
-        Tags.of(self).add("pe:kind", "main" if is_main else "preview")
+        # Tags on every resource; `preview-env:kind` lets tooling tell previews from main (D21).
+        Tags.of(self).add("preview-env:env", spec.env)
+        Tags.of(self).add("preview-env:kind", "main" if is_main else "preview")
 
         shared = SharedRefs.from_ssm(self)
         database: EnvDatabase = (

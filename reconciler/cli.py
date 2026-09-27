@@ -1,5 +1,9 @@
 """CLI: `uv run python -m reconciler plan|apply (--group X | --branch B | --env main)`.
 
+Also `teardown --group X`: an operator command that deletes a preview env's stack even if
+branches still exist (e.g. a missed delete event, D21/D29). The reconciler itself only
+tears down when no branches remain (D26).
+
 Exit codes: 0 = done (including ignored branches and no-ops), 1 = refused or failed
 (conflict, missing images, blocked stack, deploy error, bad config), 2 = bad usage.
 """
@@ -11,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from reconciler.branches import Group, Ignored, Main, parse_branch, validate_group
-from reconciler.core import MAIN_ENV, Action, Plan
+from reconciler.core import MAIN_ENV, Action, Plan, Teardown, desired_env
 from reconciler.ports import (
     BranchSource,
     Deployer,
@@ -20,7 +24,7 @@ from reconciler.ports import (
     StackDeleter,
     StackInventory,
 )
-from reconciler.reconcile import apply_plan, build_plan
+from reconciler.reconcile import apply_plan, build_plan, list_branches
 from reconciler.registry import DEFAULT_REGISTRY_PATH, Registry, load_registry
 from reconciler.render import (
     render_ignored_markdown,
@@ -75,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m reconciler",
         description="Work out what a preview env should run, and make it so.",
     )
-    parser.add_argument("command", choices=["plan", "apply"])
+    parser.add_argument("command", choices=["plan", "apply", "teardown"])
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--group", help="reconcile the env for this group")
     target.add_argument("--branch", help="reconcile the env this branch belongs to")
@@ -93,6 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="append env=<env> and action=<action> here (e.g. $GITHUB_OUTPUT)",
     )
+    parser.add_argument(
+        "--spec-out",
+        type=Path,
+        help="apply: also write the deployed EnvSpec here (for the smoke test)",
+    )
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY_PATH)
     return parser
 
@@ -100,8 +109,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None, *, adapters: AdapterFactory = real_adapters) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command == "apply" and args.no_aws:
-        parser.error("apply needs AWS; --no-aws only works with plan")
+    if args.command != "plan" and args.no_aws:
+        parser.error(f"{args.command} needs AWS; --no-aws only works with plan")
+    if args.command == "teardown" and args.group is None:
+        parser.error("teardown needs --group (the main env is never torn down)")
 
     summary = _Summary(args.summary_file)
     outputs = _Outputs(args.github_output)
@@ -134,6 +145,9 @@ def main(argv: Sequence[str] | None = None, *, adapters: AdapterFactory = real_a
                 "GitHub user or org that owns the service repos, or export PE_GITHUB_OWNER."
             )
         deps = adapters(registry, not args.no_aws)
+        if args.command == "teardown":
+            assert isinstance(target, Group) and deps.deleter is not None
+            return _teardown(target.name, registry, deps, outputs)
         plan = build_plan(
             target,
             trigger=trigger,
@@ -151,7 +165,9 @@ def main(argv: Sequence[str] | None = None, *, adapters: AdapterFactory = real_a
             return 0
 
         assert deps.deployer is not None and deps.deleter is not None and deps.stacks is not None
-        action = apply_plan(plan, deployer=deps.deployer, deleter=deps.deleter)
+        action = apply_plan(
+            plan, deployer=deps.deployer, deleter=deps.deleter, spec_out=args.spec_out
+        )
         result = f"Applied: {action} for env '{plan.env}'."
         if action in (Action.CREATE, Action.UPDATE, Action.DELETE_THEN_CREATE):
             stack_outputs = deps.stacks.outputs(plan.env)
@@ -168,6 +184,20 @@ def main(argv: Sequence[str] | None = None, *, adapters: AdapterFactory = real_a
             message = f"AWS error: {err} (for a plan without AWS, use --no-aws)"
             return _fail(message, summary, outputs, target)
         raise
+
+
+def _teardown(group: str, registry: Registry, deps: Adapters, outputs: _Outputs) -> int:
+    desired = desired_env(group, registry, list_branches(group, registry, deps.github))
+    if not isinstance(desired, Teardown):
+        print(
+            f"WARNING: group '{group}' still has preview branches; the next push to one of "
+            "them recreates the env. Delete the branches to keep it gone."
+        )
+    outputs.write(env=group, action=str(Action.DESTROY))
+    assert deps.deleter is not None
+    deps.deleter.delete(group)
+    print(f"Torn down env '{group}'.")
+    return 0
 
 
 def _planned_action(plan: Plan) -> str:

@@ -1,0 +1,126 @@
+# A service repo changed (push or delete of main/preview/*), or someone asked by hand:
+# reconcile the env that branch belongs to (D8, D23, D26).
+#
+#   plan   learns which env this is and what would change (read-only)
+#   apply  runs inside that env's queue and recomputes the plan fresh from GitHub and
+#          CloudFormation. That's why GitHub dropping an older queued run is safe (D24):
+#          whichever run goes last sees the latest branches.
+name: Reconcile
+
+on:
+  repository_dispatch:
+    types: [service-changed]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to reconcile, e.g. preview/checkout/api or main"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  # Payload values are attacker-influenced (branch names): pass them via env vars, never
+  # inline them into `run:` scripts.
+  BRANCH: ${{ github.event.client_payload.branch || inputs.branch }}
+  GITHUB_TOKEN: ${{ github.token }}  # GitHub API reads without the 60/h anonymous limit
+  PE_GITHUB_OWNER: ${{ github.repository_owner }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      env: ${{ steps.plan.outputs.env }}
+      action: ${{ steps.plan.outputs.action }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: "0.12.19"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # Conflicts and other refusals fail here, loudly, and nothing is applied.
+      - name: Plan
+        id: plan
+        run: >-
+          uv run python -m reconciler plan --branch "$BRANCH"
+          --github-output "$GITHUB_OUTPUT"
+          --summary-file "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    needs: plan
+    # Only when something would change (not for noop or ignored branches).
+    if: contains(fromJSON('["create", "update", "destroy", "delete-then-create"]'), needs.plan.outputs.action)
+    runs-on: ubuntu-24.04
+    # One run per env at a time, across both service repos; at most one waits (D24).
+    concurrency:
+      group: preview-env-${{ needs.plan.outputs.env }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: "0.12.19"
+          enable-cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          uv sync --locked
+          npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Apply
+        id: apply
+        run: >-
+          uv run python -m reconciler apply --branch "$BRANCH"
+          --spec-out envspec.json
+          --github-output "$GITHUB_OUTPUT"
+          --summary-file "$GITHUB_STEP_SUMMARY"
+
+      # Smoke-test only what was (re)deployed; a teardown has nothing to test. The action
+      # comes from the fresh plan inside the queue, not from the plan job.
+      - name: Allow this runner's IP
+        id: runner-ip
+        if: contains(fromJSON('["create", "update", "delete-then-create"]'), steps.apply.outputs.action)
+        run: |
+          ip="$(curl -fsS https://checkip.amazonaws.com)"
+          echo "cidr=${ip}/32" >> "$GITHUB_OUTPUT"
+          uv run python scripts/allow_ip.py add --cidr "${ip}/32"
+
+      - name: Smoke test
+        if: steps.runner-ip.outcome == 'success'
+        env:
+          ENV_NAME: ${{ steps.apply.outputs.env }}
+        run: uv run python scripts/smoke_test.py "$ENV_NAME" --spec envspec.json
+
+      - name: Remove this runner's IP
+        if: always() && steps.runner-ip.outputs.cidr != ''
+        env:
+          CIDR: ${{ steps.runner-ip.outputs.cidr }}
+        run: uv run python scripts/allow_ip.py remove --cidr "$CIDR"

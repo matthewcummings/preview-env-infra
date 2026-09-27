@@ -11,7 +11,7 @@ from aws_cdk import aws_ecr as ecr
 from aws_cdk import aws_iam as iam
 from constructs import Construct
 
-from infra.config import PREFIX
+from infra.config import ENV_STACK_PREFIX, SHARED_STACK_NAME
 from reconciler.registry import Registry
 
 GITHUB_OIDC_URL = "https://token.actions.githubusercontent.com"
@@ -87,10 +87,26 @@ class GithubOidc(Construct):
         # 2. Direct reads for the reconciler.
         self.infra_role.add_to_policy(
             iam.PolicyStatement(
-                # Which pe-env-* stacks exist. These actions don't support resource scoping
+                # Which preview-env-* stacks exist. These actions don't support resource scoping
                 # for ListStacks, so "*" (read-only).
                 actions=["cloudformation:ListStacks", "cloudformation:DescribeStacks"],
                 resources=["*"],
+            )
+        )
+        stack_arn = f"arn:{Aws.PARTITION}:cloudformation:{Aws.REGION}:{Aws.ACCOUNT_ID}:stack"
+        self.infra_role.add_to_policy(
+            iam.PolicyStatement(
+                # Teardown deletes env stacks directly (D35); events show its progress.
+                # The stack's own CDK execution role removes the resources, so no PassRole.
+                actions=["cloudformation:DeleteStack", "cloudformation:DescribeStackEvents"],
+                resources=[f"{stack_arn}/{ENV_STACK_PREFIX}*/*"],
+            )
+        )
+        self.infra_role.add_to_policy(
+            iam.PolicyStatement(
+                # deploy_baseline.py: does preview-baseline manage the GitHub OIDC provider? (D39)
+                actions=["cloudformation:ListStackResources"],
+                resources=[f"{stack_arn}/{SHARED_STACK_NAME}/*"],
             )
         )
         self.infra_role.add_to_policy(
@@ -103,7 +119,7 @@ class GithubOidc(Construct):
             iam.PolicyStatement(
                 actions=["ssm:GetParameter", "ssm:GetParameters"],
                 resources=[
-                    f"arn:{Aws.PARTITION}:ssm:{Aws.REGION}:{Aws.ACCOUNT_ID}:parameter/{PREFIX}/shared/*"
+                    f"arn:{Aws.PARTITION}:ssm:{Aws.REGION}:{Aws.ACCOUNT_ID}:parameter/{SHARED_STACK_NAME}/*"
                 ],
             )
         )

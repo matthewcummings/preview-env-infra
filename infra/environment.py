@@ -55,7 +55,7 @@ class AppEnvironment(Construct):
             self,
             "AlbSg",
             vpc=shared.vpc,
-            description="Env ALB: HTTP from the pe-alb-allowlist prefix list only",
+            description="Env ALB: HTTP from the preview-baseline-alb-allowlist prefix list only",
             allow_all_outbound=False,  # egress to the tasks is added per target below
         )
         alb_sg.add_ingress_rule(
@@ -118,7 +118,7 @@ class AppEnvironment(Construct):
             ),
         )
         # The reconciler resolved the image to `<registry>/<service>@sha256:...` (D11). Pin
-        # it to this service's own ECR repo in pe-shared: an EnvSpec can't point a service
+        # it to this service's own ECR repo in preview-baseline: an EnvSpec can't point a service
         # at someone else's image, and CDK grants the pull permission for exactly this repo.
         image = ecs.ContainerImage.from_ecr_repository(
             ecr.Repository.from_repository_name(scope, "Repo", service.name),

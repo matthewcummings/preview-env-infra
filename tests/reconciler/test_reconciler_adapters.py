@@ -104,7 +104,7 @@ def test_ecr_repo_missing_is_a_clear_error(aws_env):
     client = boto3.client("ecr", region_name="us-east-1")
     with Stubber(client) as stub:
         stub.add_client_error("describe_images", "RepositoryNotFoundException")
-        with pytest.raises(ReconcileError, match="pe-shared"):
+        with pytest.raises(ReconcileError, match="preview-baseline"):
             EcrImages(client, "us-east-1").image_for("service-a", SHA)
 
 
@@ -117,17 +117,17 @@ def test_cloudformation_lists_env_stacks_only(aws_env):
             {
                 "StackSummaries": [
                     {
-                        "StackName": "pe-env-checkout",
+                        "StackName": "preview-env-checkout",
                         "StackStatus": "ROLLBACK_COMPLETE",
                         "CreationTime": now,
                     },
                     {
-                        "StackName": "pe-env-main",
+                        "StackName": "preview-env-main",
                         "StackStatus": "UPDATE_COMPLETE",
                         "CreationTime": now,
                     },
                     {
-                        "StackName": "pe-shared",
+                        "StackName": "preview-baseline",
                         "StackStatus": "UPDATE_COMPLETE",
                         "CreationTime": now,
                     },
@@ -151,7 +151,7 @@ def test_cdk_deploy_command():
                 "npx",
                 "cdk",
                 "deploy",
-                "pe-env-checkout",
+                "preview-env-checkout",
                 "-c",
                 "envSpec=/tmp/spec.json",
                 "--require-approval",
@@ -171,7 +171,7 @@ def test_cdk_failure_raises():
 
 # --- CloudFormation delete (D35) ----------------------------------------------------------
 
-STACK_ID = "arn:aws:cloudformation:us-east-1:123456789012:stack/pe-env-checkout/abc"
+STACK_ID = "arn:aws:cloudformation:us-east-1:123456789012:stack/preview-env-checkout/abc"
 NOW = "2026-09-26T00:00:00Z"
 
 
@@ -180,7 +180,7 @@ def stack(status):
         "Stacks": [
             {
                 "StackId": STACK_ID,
-                "StackName": "pe-env-checkout",
+                "StackName": "preview-env-checkout",
                 "StackStatus": status,
                 "CreationTime": NOW,
             }
@@ -194,7 +194,7 @@ def events(*items):
             {
                 "EventId": eid,
                 "StackId": STACK_ID,
-                "StackName": "pe-env-checkout",
+                "StackName": "preview-env-checkout",
                 "Timestamp": NOW,
                 "LogicalResourceId": rid,
                 "ResourceStatus": status,
@@ -205,7 +205,7 @@ def events(*items):
     }
 
 
-OLD = ("e0", "pe-env-checkout", "UPDATE_COMPLETE", None)
+OLD = ("e0", "preview-env-checkout", "UPDATE_COMPLETE", None)
 BY_ID = {"StackName": STACK_ID}
 
 
@@ -218,7 +218,7 @@ def test_delete_waits_and_prints_new_events(aws_env):
     logs = []
     with Stubber(client) as stub:
         stub.add_response(
-            "describe_stacks", stack("UPDATE_COMPLETE"), {"StackName": "pe-env-checkout"}
+            "describe_stacks", stack("UPDATE_COMPLETE"), {"StackName": "preview-env-checkout"}
         )
         stub.add_response("describe_stack_events", events(OLD), BY_ID)
         stub.add_response("delete_stack", {}, BY_ID)
@@ -244,11 +244,11 @@ def test_delete_waits_and_prints_new_events(aws_env):
         deleter(client, logs).delete("checkout")
         stub.assert_no_pending_responses()
     assert logs == [
-        "Deleting stack pe-env-checkout (attempt 1 of 2)...",
+        "Deleting stack preview-env-checkout (attempt 1 of 2)...",
         "  Alb DELETE_IN_PROGRESS",
         "  ...still deleting (DELETE_IN_PROGRESS)",
         "  Alb DELETE_COMPLETE",
-        "Stack pe-env-checkout deleted.",
+        "Stack preview-env-checkout deleted.",
     ]
 
 
@@ -270,10 +270,11 @@ def test_delete_retries_once_then_fails_loudly(aws_env):
         stub.assert_no_pending_responses()
     message = str(exc.value)
     assert (
-        "could not delete stack pe-env-checkout: it is DELETE_FAILED after 2 attempt(s)" in message
+        "could not delete stack preview-env-checkout: it is DELETE_FAILED after 2 attempt(s)"
+        in message
     )
     assert "PreviewDb: Data API timeout again" in message
-    assert "Stack pe-env-checkout is DELETE_FAILED; retrying the delete once." in logs
+    assert "Stack preview-env-checkout is DELETE_FAILED; retrying the delete once." in logs
 
 
 def test_delete_missing_stack_is_a_noop(aws_env):
@@ -281,7 +282,9 @@ def test_delete_missing_stack_is_a_noop(aws_env):
     logs = []
     with Stubber(client) as stub:
         stub.add_client_error(
-            "describe_stacks", "ValidationError", "Stack with id pe-env-checkout does not exist"
+            "describe_stacks",
+            "ValidationError",
+            "Stack with id preview-env-checkout does not exist",
         )
         deleter(client, logs).delete("checkout")
-    assert logs == ["Stack pe-env-checkout does not exist; nothing to delete."]
+    assert logs == ["Stack preview-env-checkout does not exist; nothing to delete."]

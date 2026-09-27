@@ -5,7 +5,7 @@
     uv run python scripts/allow_ip.py remove [--cidr 203.0.113.7/32]
 
 Without --cidr, uses the caller's current public IPv4 address as a /32. The prefix list ID
-comes from SSM (published by pe-shared), so this works against whichever account/region
+comes from SSM (published by preview-baseline), so this works against whichever account/region
 your AWS credentials point at. Changes apply to every env immediately, no redeploy.
 
 Idempotent: adding a CIDR that's already there, or removing one that isn't, does nothing
@@ -28,7 +28,7 @@ from botocore.exceptions import ClientError
 
 if __package__ in (None, ""):
     # Run as a file (`python scripts/allow_ip.py`): make the repo root importable so the SSM
-    # key comes from the same place pe-shared publishes it (no copy to drift).
+    # key comes from the same place preview-baseline publishes it (no copy to drift).
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from infra.config import DEFAULT_REGION, SsmKeys  # noqa: E402

@@ -35,7 +35,7 @@ def test_text_no_aws_a_only():
         [
             "Plan for preview env 'checkout'",
             "  Trigger: branch preview/checkout/api",
-            "  Stack:   pe-env-checkout (not checked)",
+            "  Stack:   preview-env-checkout (not checked)",
             "",
             "  service-a  preview/checkout/api @ af1af1a",
             "  service-b  none found -> main @ b0b0b0b",
@@ -49,7 +49,7 @@ def test_text_no_aws_a_only():
 def test_text_create_shows_images():
     text = render_text(plan_for(A_ONLY, status=None))
     assert f"    image {image('service-a', A_FEAT)}" in text
-    assert "  Stack:   pe-env-checkout (does not exist)" in text
+    assert "  Stack:   preview-env-checkout (does not exist)" in text
     assert "  Action: create - stack does not exist yet" in text
 
 
@@ -99,7 +99,7 @@ def test_text_main_env():
 def test_markdown_table():
     md = render_markdown(plan_for(A_ONLY))
     assert md.startswith("### Preview env `checkout`\n")
-    assert "- **Stack:** `pe-env-checkout` (UPDATE_COMPLETE)" in md
+    assert "- **Stack:** `preview-env-checkout` (UPDATE_COMPLETE)" in md
     assert "| Service | Branch found | Runs | Image | Note |" in md
     assert (
         "| service-a | `preview/checkout/api` @ `af1af1a` | `preview/checkout/api` @ `af1af1a` "
