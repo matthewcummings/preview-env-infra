@@ -153,7 +153,7 @@ The core of the take-home: deciding which branches of which services run togethe
   | A and B, different groups | two envs, each paired with the other service's `main` |
 
 - **The env is named after the group, not the branch,** so when a second repo joins a group later, the existing env updates in place.
-- **Branches outside the convention are loudly ignored:** no env, and the run summary explains why and suggests a rename. Bot branches (`dependabot/*`, `renovate/*`) are ignored quietly. Opting out is the default: don't use `preview/`.
+- **Opting out is the default:** branches without `preview/` get no env; service CI runs the checks and never signals the infra repo. A `preview/` branch with an **invalid group name** is ignored loudly but never fails: its reconcile run stays green and the summary explains why and suggests a rename. Bot branches (`dependabot/*`, `renovate/*`) are ignored quietly.
 - **Conflict rule:** Sharing a group across repos is deliberate. Two branches in the *same* repo claiming one group is ambiguous, so the reconciler refuses, names both branches, and leaves the env unchanged.
 - **Plan output:** Every run prints a `terraform plan`-style summary (the env, what triggered it, per service the matched branch or "none -> main" with its SHA, and the action) to the log and the GitHub job summary.
 - **Considered:**
@@ -531,7 +531,7 @@ The preview half of this decision was revised by D40 (where the database lives).
 ### D3. Keep the deployment running after submission
 
 - **Chose:** `main` and at least one preview stay deployed for the review period, then everything is torn down.
-- **Revised:** I originally planned open live URLs. D42 locked the ALBs down by default, so evidence comes from the video and the public CI logs (including smoke-test output). Access can be opened for a reviewer's IP on request with one command.
+- **Revised:** I originally planned open live URLs. D42 locked the ALBs down by default, so reviewers see it working through the video, the public Actions history (including smoke-test output) and the preview comment on a pull request.
 
 ### D20. Bring your own AWS account
 

@@ -8,9 +8,9 @@ The original take-home prompt is in [`prompt.md`](prompt.md).
 
 Per-branch **preview environments** on AWS for a team of containerized microservices, built with **AWS CDK (Python)**, ECS Fargate on Graviton (ARM64, about 20% cheaper than x86), Aurora Serverless v2 PostgreSQL and GitHub Actions.
 
-Push a `preview/<group>/...` branch to any service repo and you get an isolated, end-to-end copy of the system: every service, each with its own logical database (copied from `main`), behind one load balancer per preview environment. Services with a branch in that group run their branch; the rest run `main`. When a branch is merged or deleted, its service falls back to `main`; once no branches remain in the group, the environment tears itself down.
+Push a `preview/<group>/...` branch to any service repo and you get an isolated, end-to-end copy of the system: every service, behind one load balancer per preview environment. Services with a branch in that group run their branch; the rest run `main`'s code. Either way, every service uses the environment's own copy of its database (copied from `main` when the environment is created), never the shared `main` environment's database. When a branch is merged or deleted, its service falls back to `main`; once no branches remain in the group, the environment tears itself down.
 
-This repo is the platform: the shared infrastructure, the environment definition, and the **reconciler** that decides what each environment runs. The two demo services live in their own repos: [service-a](https://github.com/matthewcummings/service-a) and [service-b](https://github.com/matthewcummings/service-b). (Inside a company I'd probably call this repo `dev-infra`: it also holds the shared dev baseline.)
+This repo is the platform: the shared infrastructure, the environment definition, and the **reconciler** that decides what each environment runs. The two demo services live in their own repos: [service-a](https://github.com/matthewcummings/service-a) and [service-b](https://github.com/matthewcummings/service-b).
 
 > **Why three repos?** The prompt asks for two service repos plus a CDK project. Shared infrastructure doesn't belong in either service's codebase, so it lives here, and this README is the entry point.
 
@@ -23,7 +23,7 @@ A and B are service-a and service-b. The same rules apply to any number of servi
 | New branch in A only | A: `preview/checkout/api` | env `checkout`: A's branch + B's `main` |
 | New branch in B only | B: `preview/search/index` | env `search`: A's `main` + B's branch |
 | A and B, same feature group | A: `preview/checkout/api`, B: `preview/checkout/schema` | one env `checkout` running both branches |
-| A and B, different groups | A: `preview/checkout/api`, B: `preview/search/index` | two envs, each paired with the other service's `main` |
+| A and B, different groups | A: `preview/checkout/api`, B: `preview/search/index` | two envs, each paired with the other service's `main` (i.e. the first two rows at once: no special case) |
 | Branch deleted or merged | delete `preview/checkout/api` | env `checkout` falls back to A's `main` if B's branch remains, or is torn down when no branches remain |
 
 **Feature groups are a branch naming convention:** `preview/<group>[/<description>]`.
@@ -31,7 +31,7 @@ A and B are service-a and service-b. The same rules apply to any number of servi
 - The `/<description>` part is optional and never matters for grouping: `preview/checkout/api` in A and `preview/checkout/schema` in B share env `checkout`, and so would `preview/checkout` alone.
 - One branch per repo per group: if a repo has two branches in the same group (say `preview/checkout/a` and `preview/checkout/b`), the reconciler refuses, names both branches, and leaves the environment unchanged.
 - Group names are strict: 1-20 characters of `a-z`, `0-9` and `-`, and not `main`. Lowercase only, so there's no ambiguity between look-alikes such as `Checkout` and `checkout`. The length limit keeps names within AWS resource-name limits. Invalid names are rejected with a clear message, never silently converted, so the group is always exactly what you typed.
-- Branches without the `preview/` prefix get no environment, loudly: CI explains why and how to rename the branch.
+- Branches without the `preview/` prefix simply get no environment: not wanting a preview is the default, and CI just runs the checks. A `preview/` branch with an invalid group name gets none either; its reconcile run stays green and its summary explains why and how to rename the branch.
 
 **Where to look next:**
 - [`docs/decisions.md`](docs/decisions.md): every design decision (D1-D47), what I considered and why. Code comments cite these IDs.
@@ -47,16 +47,17 @@ The prompt describes microservices "with a shared database". I read that as **on
 
 - One Aurora cluster. Each service owns its own **logical database** (`service_a`, `service_b`) and DB user. `CONNECT` is revoked from everyone else, and IAM only lets a service's tasks log in as that service's user.
 - In each preview environment, each service gets **its own logical database on the same cluster** (e.g. `service_a__checkout`). It's copied from `main` when the environment is created, and kept across later pushes. A preview copies `main` through a **read-only** user, so it can't write to `main`.
-- Each preview's database user has a connection limit and a statement timeout, so one busy preview can't starve `main` or the other previews.
-- Services never read each other's tables; anything cross-service would go through the owning service's API.
+- Each preview's database user has a connection limit and a statement timeout, so one busy preview can't starve `main` or the other previews. Both are tunable constants in [`infra/preview_db.py`](infra/preview_db.py) (20 connections, 30 seconds).
+- Services never read each other's tables; anything cross-service goes through the owning service's API.
 
 Details and alternatives (schemas, a cluster per service, Aurora clones, sidecar databases): D12, D40, D41 in [`docs/decisions.md`](docs/decisions.md).
 
 ## How it works
 
-There are two kinds of CloudFormation stack:
-- **`preview-baseline`**: the long-lived baseline, deployed once: VPC, ECS cluster, ECR repositories, the Aurora cluster, and the GitHub OIDC roles.
+There are two types of CloudFormation stack:
+- **`preview-baseline`**: the long-lived baseline and supporting resources, deployed once: VPC, ECS cluster, ECR repositories, the Aurora cluster, and the GitHub OIDC roles.
 - **`preview-env-<name>`**: one per environment, including `main` (`preview-env-main`) and each preview (`preview-env-checkout`): a load balancer plus one service per registered app.
+  - **`preview-env-main` is special:** it's the shared dev environment, the "prod of dev". It's long-lived (never torn down), it's updated on every merge to a service's `main`, it migrates and seeds its own databases, and those databases are the source of truth every preview copies from.
 
 ```mermaid
 flowchart LR
