@@ -55,7 +55,7 @@ class GithubOidc(Construct):
                 f"{service.name}-Role",
                 description=f"GitHub Actions in {owner}/{service.repo}: push to its ECR repo",
                 # Any ref: CI pushes images for main and preview/* branches (D11).
-                assumed_by=self._github_principal(f"repo:{owner}/{service.repo}:*"),
+                assumed_by=self._github_principal(owner, service.repo, "*"),
             )
             repositories[service.name].grant_push(role)
             self.service_roles[service.name] = role
@@ -72,7 +72,7 @@ class GithubOidc(Construct):
             self,
             "InfraRole",
             description=f"GitHub Actions in {owner}/{infra_repo}: deploy through CDK",
-            assumed_by=self._github_principal(f"repo:{owner}/{infra_repo}:ref:refs/heads/main"),
+            assumed_by=self._github_principal(owner, infra_repo, "ref:refs/heads/main"),
         )
         # 1. Deploy only through the CDK bootstrap roles (-> CloudFormation) (D32).
         self.infra_role.add_to_policy(
@@ -145,11 +145,24 @@ class GithubOidc(Construct):
             value=self.infra_role.role_arn,
         )
 
-    def _github_principal(self, subject: str) -> iam.IPrincipal:
+    def _github_principal(self, owner: str, repo: str, ref: str) -> iam.IPrincipal:
         return iam.WebIdentityPrincipal(
             self.provider.oidc_provider_arn,
             conditions={
                 "StringEquals": {f"{GITHUB_OIDC_HOST}:aud": STS_AUDIENCE},
-                "StringLike": {f"{GITHUB_OIDC_HOST}:sub": subject},
+                "StringLike": {f"{GITHUB_OIDC_HOST}:sub": github_subjects(owner, repo, ref)},
             },
         )
+
+
+def github_subjects(owner: str, repo: str, ref: str) -> list[str]:
+    """The OIDC `sub` claims a role accepts for `owner/repo` at `ref` (e.g. `*`).
+
+    GitHub sends one of two formats: the classic `repo:owner/repo:...`, or the newer one
+    with immutable IDs, `repo:owner@<owner id>/repo@<repo id>:...` (the IDs stop a deleted
+    and re-created repo with the same name from inheriting the trust). Both are accepted,
+    with the IDs as wildcards, so the check is owner name + repo name + ref either way.
+    The `@` right after the owner and before the repo keeps look-alike names from matching
+    (e.g. `owner-evil`). Pinning the actual IDs is a hardening TODO.
+    """
+    return [f"repo:{owner}/{repo}:{ref}", f"repo:{owner}@*/{repo}@*:{ref}"]

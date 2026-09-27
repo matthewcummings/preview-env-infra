@@ -73,9 +73,10 @@ def test_service_repo_roles_trust_only_their_own_repo(template, registry):
                                         )
                                     },
                                     "StringLike": {
-                                        "token.actions.githubusercontent.com:sub": (
-                                            f"repo:{registry.github_owner}/{svc.repo}:*"
-                                        )
+                                        "token.actions.githubusercontent.com:sub": [
+                                            f"repo:{registry.github_owner}/{svc.repo}:*",
+                                            f"repo:{registry.github_owner}@*/{svc.repo}@*:*",
+                                        ]
                                     },
                                 },
                             }
@@ -112,10 +113,12 @@ def test_infra_role_deploys_only_via_cdk_bootstrap_roles(template, registry):
                             "Condition": Match.object_like(
                                 {
                                     "StringLike": {
-                                        "token.actions.githubusercontent.com:sub": (
+                                        "token.actions.githubusercontent.com:sub": [
                                             f"repo:{registry.github_owner}/infra-repo:"
-                                            "ref:refs/heads/main"
-                                        )
+                                            "ref:refs/heads/main",
+                                            f"repo:{registry.github_owner}@*/infra-repo@*:"
+                                            "ref:refs/heads/main",
+                                        ]
                                     }
                                 }
                             )
@@ -261,3 +264,21 @@ def test_alb_allowlist_prefix_list_has_no_entries(template):
             "Value": {"Fn::GetAtt": ["AlbAllowlist", "PrefixListId"]},
         },
     )
+
+
+def test_github_subjects_accept_both_formats_but_not_lookalikes():
+    """GitHub may send `repo:owner@<id>/repo@<id>:...` (seen live) or the classic format."""
+    import fnmatch
+
+    from infra.github_oidc import github_subjects
+
+    patterns = github_subjects("matthewcummings", "service-a", "*")
+
+    def accepted(sub: str) -> bool:  # IAM StringLike: `*` matches any run of characters
+        return any(fnmatch.fnmatchcase(sub, p) for p in patterns)
+
+    assert accepted("repo:matthewcummings/service-a:ref:refs/heads/main")
+    assert accepted("repo:matthewcummings@1292655/service-a@1389969029:ref:refs/heads/main")
+    assert not accepted("repo:matthewcummings-evil@1/service-a@2:ref:refs/heads/main")
+    assert not accepted("repo:matthewcummings@1/service-a-evil@2:ref:refs/heads/main")
+    assert not accepted("repo:someone@1/service-a@2:ref:refs/heads/main")

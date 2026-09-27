@@ -273,6 +273,7 @@ All targets: `make help`. What each GitHub Actions workflow does: [`docs/operati
 - **Authentication:** with a domain, HTTPS plus authentication at the load balancer (OIDC via the ALB, or Cognito), instead of relying on the IP allowlist alone.
 - **Observability:** structured logs, metrics and traces (CloudWatch Container Insights, OpenTelemetry), with each environment's name as a dimension.
 - **Alerting:** on the shared Aurora cluster, failed deploys and smoke tests, and environment count/cost.
+- **Pin GitHub's immutable IDs in the OIDC trust:** GitHub now sends the OIDC subject as `repo:owner@<owner id>/repo@<repo id>:...`. The roles accept it with the IDs as wildcards (and the classic format); pinning the real IDs would stop a deleted and re-created repo with the same name from inheriting the trust.
 - **Cost visibility:** every stack is already tagged with its environment (`preview-env:env`), so per-environment cost shows up once the tags are activated for cost allocation.
 
 **Scaling past a handful of services:** every preview runs every service, so databases and connections grow with environments x services. The fix, in order: smaller pools (done), **partial environments** (deploy only the services that changed and route the rest to `main`), RDS Proxy, then a cluster per service (D41).
