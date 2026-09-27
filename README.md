@@ -37,7 +37,7 @@ A and B are service-a and service-b. The same rules apply to any number of servi
 - [`docs/decisions.md`](docs/decisions.md): every design decision (D1-D42), what I considered and why. Code comments cite these IDs.
 - [How it works](#how-it-works) below, then the code: [`reconciler/core.py`](reconciler/core.py) is the heart of it.
 
-**Proof it works:** every push runs the tests, lint and `cdk synth` in public GitHub Actions ([infra](https://github.com/matthewcummings/preview-env-infra/actions), [service-a](https://github.com/matthewcummings/service-a/actions), [service-b](https://github.com/matthewcummings/service-b/actions)), and every deploy runs a smoke test against the live environment.
+**CI:** every push runs the tests, lint and `cdk synth` in GitHub Actions ([infra](https://github.com/matthewcummings/preview-env-infra/actions), [service-a](https://github.com/matthewcummings/service-a/actions), [service-b](https://github.com/matthewcummings/service-b/actions)), and every deploy smoke-tests the live environment.
 
 <!-- TODO(matt): video link, live URL note, links to specific preview deploy runs -->
 
