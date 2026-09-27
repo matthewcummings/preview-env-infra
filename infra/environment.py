@@ -49,18 +49,32 @@ class AppEnvironment(Construct):
         super().__init__(scope, id)
         _check_spec_matches_registry(spec, registry)
 
+        # D42: HTTP only from the shared allowlist prefix list. Adding or removing an entry
+        # there takes effect on every env at once, with no redeploy.
+        alb_sg = ec2.SecurityGroup(
+            self,
+            "AlbSg",
+            vpc=shared.vpc,
+            description="Env ALB: HTTP from the pe-alb-allowlist prefix list only",
+            allow_all_outbound=False,  # egress to the tasks is added per target below
+        )
+        alb_sg.add_ingress_rule(
+            ec2.Peer.prefix_list(shared.alb_allowlist_prefix_list_id),
+            ec2.Port.tcp(HTTP_PORT),
+            "HTTP from the ALB allowlist (D42)",
+        )
         self.alb = elbv2.ApplicationLoadBalancer(
             self,
             "Alb",
             vpc=shared.vpc,
-            internet_facing=True,
+            internet_facing=True,  # public subnets, but only allowlisted IPs get in
+            security_group=alb_sg,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
         )
-        # Open to the internet (D9; an ingress CIDR allow-list is a documented TODO, D29).
         self.listener = self.alb.add_listener(
             "Http",
             port=HTTP_PORT,
-            open=True,
+            open=False,  # no 0.0.0.0/0 rule: ingress comes only from the allowlist above
             default_action=elbv2.ListenerAction.fixed_response(
                 404, content_type="text/plain", message_body="No service at this path\n"
             ),

@@ -22,6 +22,11 @@ AZ_COUNT = 2
 # gatekeeper; CDK re-checks because the name ends up in a stack name.
 ENV_NAME_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$")
 
+# D42: the prefix list every env's ALB accepts HTTP from. Entries are managed by
+# scripts/allow_ip.py, never by CloudFormation (see shared_stack.py).
+ALB_ALLOWLIST_NAME = f"{PREFIX}-alb-allowlist"
+ALB_ALLOWLIST_MAX_ENTRIES = 20
+
 # Default GitHub repo name of this (infra) repo; override with `-c infraRepo=<name>`.
 DEFAULT_INFRA_REPO = "preview-env-infra"
 
@@ -64,3 +69,4 @@ class SsmKeys:
     DB_PORT = f"{_BASE}/db-port"
     DB_RESOURCE_ID = f"{_BASE}/db-resource-id"  # for rds-db:connect ARNs
     DB_CLIENT_SECURITY_GROUP_ID = f"{_BASE}/db-client-security-group-id"
+    ALB_ALLOWLIST_PREFIX_LIST_ID = f"{_BASE}/alb-allowlist-prefix-list-id"  # D42

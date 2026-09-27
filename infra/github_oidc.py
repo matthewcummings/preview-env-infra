@@ -28,6 +28,7 @@ class GithubOidc(Construct):
         registry: Registry,
         repositories: dict[str, ecr.IRepository],
         infra_repo: str,
+        alb_allowlist_arn: str,
         create_provider: bool = True,
     ) -> None:
         super().__init__(scope, id)
@@ -104,6 +105,21 @@ class GithubOidc(Construct):
                 resources=[
                     f"arn:{Aws.PARTITION}:ssm:{Aws.REGION}:{Aws.ACCOUNT_ID}:parameter/{PREFIX}/shared/*"
                 ],
+            )
+        )
+        # 3. CI smoke tests (D34/D42): add the runner's IP to the ALB allowlist, then remove
+        # it. Writes only to that one prefix list.
+        self.infra_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["ec2:ModifyManagedPrefixList", "ec2:GetManagedPrefixListEntries"],
+                resources=[alb_allowlist_arn],
+            )
+        )
+        self.infra_role.add_to_policy(
+            iam.PolicyStatement(
+                # Describe* calls don't support resource-level permissions.
+                actions=["ec2:DescribeManagedPrefixLists"],
+                resources=["*"],
             )
         )
         CfnOutput(

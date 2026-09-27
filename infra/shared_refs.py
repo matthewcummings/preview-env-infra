@@ -33,6 +33,7 @@ class SharedRefs:
     db_port: str  # token
     db_resource_id: str  # token, e.g. cluster-ABC123; used in rds-db:connect ARNs
     db_client_sg: ec2.ISecurityGroup
+    alb_allowlist_prefix_list_id: str  # token (D42)
 
     @classmethod
     def from_ssm(cls, scope: Construct) -> SharedRefs:
@@ -88,4 +89,5 @@ class SharedRefs:
             db_port=value(SsmKeys.DB_PORT),
             db_resource_id=value(SsmKeys.DB_RESOURCE_ID),
             db_client_sg=db_client_sg,
+            alb_allowlist_prefix_list_id=value(SsmKeys.ALB_ALLOWLIST_PREFIX_LIST_ID),
         )

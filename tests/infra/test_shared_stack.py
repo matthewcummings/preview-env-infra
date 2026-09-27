@@ -142,7 +142,17 @@ def test_infra_role_deploys_only_via_cdk_bootstrap_roles(template, registry):
         "ecr:DescribeImages",
         "ssm:GetParameter",
         "ssm:GetParameters",
+        "ec2:ModifyManagedPrefixList",
+        "ec2:GetManagedPrefixListEntries",
+        "ec2:DescribeManagedPrefixLists",
     }
+    # Writes to the allowlist are scoped to that one prefix list.
+    (write,) = (
+        stmt
+        for stmt in infra_policy["Properties"]["PolicyDocument"]["Statement"]
+        if "ec2:ModifyManagedPrefixList" in stmt["Action"]
+    )
+    assert write["Resource"] == {"Fn::GetAtt": ["AlbAllowlist", "Arn"]}
 
 
 def test_shared_values_published_to_ssm_not_exports(template):
@@ -231,3 +241,20 @@ def test_publishes_data_api_targets_for_preview_databases(template):
     )
     (param,) = admin_secret.values()
     assert "AuroraSecret" in json.dumps(param["Properties"]["Value"])
+
+
+def test_alb_allowlist_prefix_list_has_no_entries(template):
+    """D42: entries live outside CloudFormation (scripts/allow_ip.py), so none in the template."""
+    (prefix_list,) = template.find_resources("AWS::EC2::PrefixList").values()
+    assert prefix_list["Properties"] == {
+        "AddressFamily": "IPv4",
+        "MaxEntries": 20,
+        "PrefixListName": "pe-alb-allowlist",
+    }
+    template.has_resource_properties(
+        "AWS::SSM::Parameter",
+        {
+            "Name": SsmKeys.ALB_ALLOWLIST_PREFIX_LIST_ID,
+            "Value": {"Fn::GetAtt": ["AlbAllowlist", "PrefixListId"]},
+        },
+    )

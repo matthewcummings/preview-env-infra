@@ -126,13 +126,40 @@ def test_fargate_arm64_with_circuit_breaker_rollback(any_template, registry):
     )
 
 
+def _ingress_into(template: Template, sg_prefix: str) -> list[dict]:
+    return [
+        r["Properties"]
+        for r in template.find_resources("AWS::EC2::SecurityGroupIngress").values()
+        if r["Properties"]["GroupId"]["Fn::GetAtt"][0].startswith(sg_prefix)
+    ]
+
+
 def test_task_security_group_only_allows_the_alb(any_template, registry):
-    ingress = any_template.find_resources("AWS::EC2::SecurityGroupIngress")
-    assert len(ingress) == len(registry.services)
-    for rule in ingress.values():
-        assert "SourceSecurityGroupId" in rule["Properties"]
-        assert "CidrIp" not in rule["Properties"]
-        assert "Alb" in rule["Properties"]["SourceSecurityGroupId"]["Fn::GetAtt"][0]
+    for svc in registry.services:
+        (rule,) = _ingress_into(any_template, f"Env{svc.name.replace('-', '')}TaskSg")
+        assert rule["SourceSecurityGroupId"]["Fn::GetAtt"][0].startswith("EnvAlbSg")
+        assert rule["FromPort"] == rule["ToPort"] == svc.port
+
+
+def test_alb_accepts_http_only_from_the_allowlist_prefix_list(any_template):
+    """D42: no 0.0.0.0/0 anywhere; port 80 only from the SSM-provided prefix list."""
+    (rule,) = _ingress_into(any_template, "EnvAlbSg")
+    assert rule["FromPort"] == rule["ToPort"] == 80
+    assert rule["SourcePrefixListId"]["Ref"].startswith(
+        "SsmParameterValuepesharedalballowlistprefixlistid"
+    )
+    raw = any_template.to_json()
+    params = raw["Parameters"]
+    assert params[rule["SourcePrefixListId"]["Ref"]]["Default"] == (
+        "/pe/shared/alb-allowlist-prefix-list-id"
+    )
+    for sg in any_template.find_resources("AWS::EC2::SecurityGroup").values():
+        for inbound in sg["Properties"].get("SecurityGroupIngress", []):
+            assert inbound.get("CidrIp") != "0.0.0.0/0"
+            assert inbound.get("CidrIpv6") != "::/0"
+    for inbound in any_template.find_resources("AWS::EC2::SecurityGroupIngress").values():
+        assert "CidrIp" not in inbound["Properties"]
+        assert "CidrIpv6" not in inbound["Properties"]
 
 
 def test_log_groups_are_removed_with_the_stack(any_template):

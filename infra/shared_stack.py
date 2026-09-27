@@ -139,12 +139,32 @@ class SharedStack(Stack):
             self, "AuroraBootstrap", cluster=self.db_cluster, services=registry.services
         )
 
+        # --- Ingress allowlist (D42): every env's ALB accepts HTTP only from this list.
+        # Created WITHOUT entries, so no IP is ever committed to the (public) repo;
+        # scripts/allow_ip.py adds and removes entries (people, CI runners).
+        # CloudFormation caveat (checked against the AWS::EC2::PrefixList resource
+        # provider's UpdateHandler): CloudFormation only touches entries when it *updates*
+        # this resource, and an update reconciles the entries to the template, i.e. would
+        # drop every script-added entry (or fail, with Entries absent). Deploys that don't
+        # change this resource leave the entries alone. So keep its properties fixed: no
+        # tags, a fixed name, and don't change pe-shared's stack-level tags (they propagate
+        # to resources and would trigger an update). MaxEntries can't be updated at all.
+        # L1 on purpose: the L2 `ec2.PrefixList` always renders `Entries: []`.
+        self.alb_allowlist = ec2.CfnPrefixList(
+            self,
+            "AlbAllowlist",
+            prefix_list_name=config.ALB_ALLOWLIST_NAME,
+            address_family="IPv4",
+            max_entries=config.ALB_ALLOWLIST_MAX_ENTRIES,
+        )
+
         GithubOidc(
             self,
             "GithubOidc",
             registry=registry,
             repositories=self.repositories,
             infra_repo=infra_repo,
+            alb_allowlist_arn=self.alb_allowlist.attr_arn,
             create_provider=create_oidc_provider,
         )
 
@@ -169,6 +189,7 @@ class SharedStack(Stack):
             SsmKeys.DB_PORT: Token.as_string(self.db_cluster.cluster_endpoint.port),
             SsmKeys.DB_RESOURCE_ID: self.db_cluster.cluster_resource_identifier,
             SsmKeys.DB_CLIENT_SECURITY_GROUP_ID: self.db_client_sg.security_group_id,
+            SsmKeys.ALB_ALLOWLIST_PREFIX_LIST_ID: self.alb_allowlist.attr_prefix_list_id,
         }
         for name, value in values.items():
             ssm.StringParameter(
