@@ -129,18 +129,25 @@ Set these **in the terminal you'll deploy from**. If your credentials come from 
 
 - **AWS:** your terminal needs credentials for an IAM identity with admin rights. Only this first-time setup uses them; CI never does. Choose your region **once** in your AWS config (`AWS_REGION` or your profile's `region`; `us-east-1` if unset), and everything else follows it.
 - **GitHub owner:** in your fork of `preview-env-infra`, set `github_owner` in [`services.yaml`](services.yaml) to the owner of your forks: your GitHub organization, or for personal forks, your GitHub username. (Alternatively, set the `PREVIEW_ENV_GITHUB_OWNER` environment variable.)
-- **Two GitHub tokens**, each able to do exactly one job. Create both as fine-grained tokens at [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new), with your GitHub owner as **Resource owner** and a 30-day **Expiration**:
+- **Two GitHub tokens**, each able to do exactly one job. Two because a fine-grained token gets the same permissions on every repo it covers: one combined token would be able to push code to all three repos. Neither of these can. GitHub has no API for creating tokens, so this part happens in the browser.
 
-  | Token | Repository access ("Only select repositories") | Repository permissions | What it's for |
-  |---|---|---|---|
-  | **Dispatch token** | `preview-env-infra` only | Contents: Read and write | Lets the service repos' CI signal this repo to deploy |
-  | **Comment token** | `service-a` and `service-b` | Pull requests: Read and write | Lets this repo's workflow post the preview URL on service-repo PRs |
+  **Token 1, the dispatch token** (lets the service repos' CI signal this repo to deploy):
+  1. Open [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new) (Settings > Developer settings > Personal access tokens > Fine-grained tokens > Generate new token).
+  2. **Token name:** `preview-env-dispatch`. **Resource owner:** your GitHub owner. **Expiration:** 30 days.
+  3. **Repository access:** "Only select repositories", then pick **`preview-env-infra`**.
+  4. **Permissions:** click **Add permissions**, choose **Contents**, and set it to **Read and write**. (Metadata: Read-only is added automatically; add nothing else.)
+  5. **Generate token**, and copy it: GitHub shows it only once.
 
-  (Metadata: read-only is added automatically.) Two tokens because a fine-grained token gets the same permissions on every repo it covers: one combined token would be able to push code to all three repos. Neither of these can.
+  **Token 2, the comment token** (lets this repo's workflow post the preview URL on service-repo PRs): the same steps, except:
+  - **Token name:** `preview-env-pr-comments`.
+  - **Repository access:** pick **`service-a`** and **`service-b`**.
+  - **Permissions:** **Add permissions** > **Pull requests** > **Read and write**.
+
+  Then enter both in your terminal. `read -rs` keeps them off the screen and out of your shell history (unlike `export TOKEN=...`):
 
   ```bash
-  export INFRA_DISPATCH_TOKEN=<the dispatch token>
-  export PREVIEW_COMMENT_TOKEN=<the comment token>
+  read -rsp "Dispatch token: " INFRA_DISPATCH_TOKEN && export INFRA_DISPATCH_TOKEN && echo
+  read -rsp "Comment token: " PREVIEW_COMMENT_TOKEN && export PREVIEW_COMMENT_TOKEN && echo
   ```
 
   Step 4 checks them, and step 7 stores them as secrets in the right repos.
