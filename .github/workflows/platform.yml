@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Every job, including deploy-baseline: the OIDC roles' trust is built from this owner, so a
+  # job without it would rebuild them for the wrong owner and lock CI out.
+  PREVIEW_ENV_GITHUB_OWNER: ${{ github.repository_owner }}
+
 jobs:
   check:
     uses: ./.github/workflows/ci.yml
@@ -66,7 +71,6 @@ jobs:
       id-token: write
     env:
       GITHUB_TOKEN: ${{ github.token }}  # GitHub API reads without the 60/h anonymous limit
-      PREVIEW_ENV_GITHUB_OWNER: ${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@v7
 

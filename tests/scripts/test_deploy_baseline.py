@@ -6,6 +6,13 @@ from script_fakes import FakeSession, client
 
 from scripts import deploy_baseline
 
+
+@pytest.fixture(autouse=True)
+def github_owner(monkeypatch):
+    """A real deploy needs a GitHub owner (services.yaml ships the CHANGE_ME placeholder)."""
+    monkeypatch.setenv("PREVIEW_ENV_GITHUB_OWNER", "octo")
+
+
 PROVIDER_ARN = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
 
 
@@ -115,3 +122,17 @@ def test_main_stops_when_cdk_fails(capsys):
     assert code == 1
     assert allowed == []
     assert "cdk deploy preview-baseline failed" in capsys.readouterr().err
+
+
+def test_refuses_to_deploy_with_the_placeholder_owner(monkeypatch, capsys):
+    """The OIDC roles trust this owner; deploying CHANGE_ME would lock CI out."""
+    from reconciler.registry import Registry
+
+    monkeypatch.setattr(
+        deploy_baseline, "load_registry", lambda: Registry(github_owner="CHANGE_ME", services=())
+    )
+    ran = []
+    code = deploy_baseline.main([], session=object(), runner=lambda cmd: ran.append(cmd) or 0)
+    assert code == 1
+    assert ran == []  # never reached cdk deploy
+    assert "github_owner is still 'CHANGE_ME'" in capsys.readouterr().err

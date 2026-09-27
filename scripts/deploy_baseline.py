@@ -25,6 +25,8 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from infra.config import DEFAULT_REGION, SHARED_STACK_NAME  # noqa: E402
+from reconciler.cli import PLACEHOLDER_OWNER  # noqa: E402
+from reconciler.registry import load_registry  # noqa: E402
 from scripts import allow_ip  # noqa: E402
 from scripts._common import Runner, fail, run  # noqa: E402
 
@@ -85,6 +87,15 @@ def main(
         help="after deploying, add your public IP to the ALB allowlist (first-time setup)",
     )
     args = parser.parse_args(argv)
+
+    # The OIDC roles' trust is built from the GitHub owner. Deploying with the placeholder would
+    # make every role trust `CHANGE_ME/...` and lock CI out (this happened once).
+    owner = load_registry().github_owner
+    if owner == PLACEHOLDER_OWNER:
+        return fail(
+            f"github_owner is still '{PLACEHOLDER_OWNER}'. Set it in services.yaml or export "
+            "PREVIEW_ENV_GITHUB_OWNER before deploying: the GitHub OIDC roles trust this owner."
+        )
 
     if session is None:
         import boto3
