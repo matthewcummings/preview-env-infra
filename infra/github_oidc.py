@@ -57,7 +57,9 @@ class GithubOidc(Construct):
                 # Any ref: CI pushes images for main and preview/* branches (D11).
                 assumed_by=self._github_principal(owner, service.repo, "*"),
             )
-            repositories[service.name].grant_push(role)
+            # Pull + push on its own repo only. Buildx reads the manifest back (BatchGetImage)
+            # when pushing more than one tag (<sha> and main-<sha>), so push-only isn't enough.
+            repositories[service.name].grant_pull_push(role)
             self.service_roles[service.name] = role
             CfnOutput(
                 self,

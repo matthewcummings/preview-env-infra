@@ -97,6 +97,7 @@ def test_service_role_can_push_to_its_own_ecr_repo_only(template, registry):
         policy = next(p for p in policies.values() if {"Ref": role_id} in p["Properties"]["Roles"])
         text = json.dumps(policy["Properties"]["PolicyDocument"])
         assert "ecr:PutImage" in text
+        assert "ecr:BatchGetImage" in text  # buildx reads the manifest back when tagging twice
         assert repo_id[svc.name] in text
         others = [repo_id[o.name] for o in registry.services if o.name != svc.name]
         assert not any(other in text for other in others)
