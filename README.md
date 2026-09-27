@@ -92,15 +92,15 @@ flowchart LR
 
 **Races:** each group maps to exactly one stack, and deploys for the same environment queue up (GitHub Actions `concurrency`). GitHub keeps only the newest waiting run per queue and drops older ones. That's safe here because every run recomputes the whole plan from GitHub and CloudFormation, so the newest run always covers everything (D24).
 
-## Deploy it yourself
+## Deployment guide
 
 ### 1. Get the code
 
-Fork all three repos ([preview-env-infra](https://github.com/matthewcummings/preview-env-infra), [service-a](https://github.com/matthewcummings/service-a), [service-b](https://github.com/matthewcummings/service-b)) into the **same** GitHub account or organization: the reconciler finds the service repos under one owner. Then clone them side by side:
+Fork all three repos ([preview-env-infra](https://github.com/matthewcummings/preview-env-infra), [service-a](https://github.com/matthewcummings/service-a), [service-b](https://github.com/matthewcummings/service-b)) into the **same** GitHub account or organization: the tooling looks up all the service repos under a single owner. Then clone them side by side:
 
 ```bash
 mkdir preview-envs && cd preview-envs
-for repo in preview-env-infra service-a service-b; do gh repo clone <your-github-owner>/$repo; done
+for repo in preview-env-infra service-a service-b; do git clone https://github.com/<your-github-owner>/$repo.git; done
 cd preview-env-infra
 ```
 
@@ -119,14 +119,14 @@ Supported: macOS, Linux, or Windows via WSL2.
 | [uv](https://docs.astral.sh/uv/) | 0.12+ | Python 3.14 and all Python dependencies |
 | Node.js | 24 | Runs the pinned CDK CLI (`npx cdk`) |
 | AWS CLI | v2 | Credentials and region |
-| [GitHub CLI](https://cli.github.com/) (`gh`) | 2+, logged in | Cloning, and setting the repos' GitHub Actions variables (`make setup-github`) |
+| [GitHub CLI](https://cli.github.com/) (`gh`) | 2+, logged in | Optional: `make setup-github` uses it to set your repos' GitHub Actions variables. Without it, set them by hand in each repo's settings. |
 
 **Either way, you also need `make`** (macOS: Xcode Command Line Tools; Ubuntu/WSL: `sudo apt install make`). Docker is only needed to run the service repos' tests, not to deploy: CI builds the images.
 
-### 3. Point it at your accounts
+### 3. Set up AWS access and your GitHub owner
 
-- **AWS:** credentials for an IAM identity with admin rights (only the first-time setup needs them; CI never uses them), and a region **chosen once** in your AWS config (`AWS_REGION` or your profile's `region`; `us-east-1` if unset). Everything else follows it.
-- **GitHub owner:** in your fork of `preview-env-infra`, set `github_owner` in [`services.yaml`](services.yaml) to the account that owns your forks. (Or export `PE_GITHUB_OWNER=<owner>` in each shell.)
+- **AWS:** your terminal needs credentials for an IAM identity with admin rights. Only this first-time setup uses them; CI never does. Choose your region **once** in your AWS config (`AWS_REGION` or your profile's `region`; `us-east-1` if unset), and everything else follows it.
+- **GitHub owner:** in your fork of `preview-env-infra`, set `github_owner` in [`services.yaml`](services.yaml) to the account that owns your forks. (Alternatively, set the `PE_GITHUB_OWNER` environment variable.)
 
 ### First-time setup
 
