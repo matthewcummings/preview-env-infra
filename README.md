@@ -188,7 +188,7 @@ This creates the `demo` preview environment: service-a on your branch, service-b
 
 <!-- TODO(matt): verify every step end to end and add real timings -->
 
-### Using it
+### Working with preview environments
 
 ```bash
 URL=$(aws cloudformation describe-stacks --stack-name preview-env-demo \
@@ -208,6 +208,8 @@ curl -X POST $URL/a/items -H 'content-type: application/json' -d '{"name": "hell
 
 All targets: `make help`. What each GitHub Actions workflow does: [`docs/operations.md`](docs/operations.md).
 
+**Running cost:** roughly $4-5/day for the baseline and `main`, plus about $1.50/day per idle preview. Tear everything down when you're done (below).
+
 ### Tearing everything down
 
 <!-- TODO(matt): consider a `make destroy-all` target -->
@@ -215,10 +217,6 @@ All targets: `make help`. What each GitHub Actions workflow does: [`docs/operati
 1. Delete every `preview/*` branch (or `make teardown GROUP=...` for each), then delete the `preview-env-main` stack.
 2. Delete the `preview-baseline` stack. Aurora takes a **final snapshot** on deletion; delete it from the RDS console to stop its (small) storage cost.
 3. Optionally delete the `CDKToolkit` stack and its S3 bucket.
-
-## What it costs
-
-Idle, the fixed costs are the NAT gateway (~$0.045/hour), Aurora's minimum 0.5 ACU (~$0.06/hour), and one ALB per environment (~$0.0225/hour each), plus small Fargate tasks (512 CPU / 1 GB, ARM64) per service per environment. Roughly **$4-5/day** for the shared baseline and `main`, plus about **$1.50/day** per idle preview (its ALB and two small tasks), plus public IPv4 charges for the NAT gateway and ALBs. <!-- TODO(matt): check against real billing -->
 
 ## Security notes
 
