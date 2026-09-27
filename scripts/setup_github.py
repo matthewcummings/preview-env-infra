@@ -3,6 +3,8 @@
     uv run python scripts/setup_github.py [--dry-run]
 
 Uses the `gh` CLI (you must be logged in: `gh auth login`). Sets:
+  - every repo:         "Automatically delete head branches" on, so merging a preview
+                        branch deletes it and tears its env down (D7, D23)
   - each service repo:  AWS_REGION, AWS_ROLE_ARN (its own push-only role, D11),
                         INFRA_REPO (<owner>/<infra repo>), and the INFRA_DISPATCH_TOKEN secret
   - the infra repo:     AWS_REGION, AWS_DEPLOY_ROLE_ARN (the infra role, D32)
@@ -14,7 +16,6 @@ them.
 """
 
 import argparse
-import json
 import os
 import subprocess
 import sys
@@ -26,9 +27,14 @@ from typing import Any
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from infra.config import DEFAULT_INFRA_REPO, DEFAULT_REGION, SHARED_STACK_NAME  # noqa: E402
+from infra.config import DEFAULT_REGION, SHARED_STACK_NAME  # noqa: E402
 from reconciler.registry import DEFAULT_REGISTRY_PATH, Registry, load_registry  # noqa: E402
-from scripts._common import REPO_ROOT, cdk_output_id, fail, stack_outputs  # noqa: E402
+from scripts._common import (  # noqa: E402
+    cdk_output_id,
+    fail,
+    infra_repo_name,
+    stack_outputs,
+)
 
 TOKEN_ENV = "INFRA_DISPATCH_TOKEN"
 PLACEHOLDER_OWNER = "CHANGE_ME"
@@ -37,12 +43,14 @@ TOKEN_HELP = """\
 {name} is not set, so the dispatch secret was not configured. Create it once:
 
   1. https://github.com/settings/personal-access-tokens/new (fine-grained token)
-  2. Resource owner: {owner}. Expiration: covers the review period.
-  3. Repository access: "Only select repositories": {repos}
-  4. Repository permissions: Contents: Read and write (write is what lets the service
-     repos send repository_dispatch to {infra}; read covers the service repos).
-     Metadata: Read-only is added automatically.
+  2. Resource owner: {owner}. Expiration: 30 days.
+  3. Repository access: "Only select repositories": ONLY {infra}
+  4. Repository permissions: Contents: Read and write (needed to send repository_dispatch).
+     Metadata: Read-only is added automatically. Nothing else.
   5. Then: export {name}=<the token> and rerun this script.
+
+The service repos' CI uses this token only to signal {infra}; the reconciler reads the
+service repos with the infra workflow's own GITHUB_TOKEN, so the token needs no access to them.
 """
 
 
@@ -54,11 +62,6 @@ class Command:
     def display(self) -> str:
         shown = " ".join(self.args)
         return f"{shown}  (value from ${TOKEN_ENV})" if self.stdin is not None else shown
-
-
-def infra_repo_name() -> str:
-    context = json.loads((REPO_ROOT / "cdk.json").read_text()).get("context", {})
-    return context.get("infraRepo") or DEFAULT_INFRA_REPO
 
 
 def role_arns(outputs: dict[str, str], registry: Registry) -> tuple[dict[str, str], str]:
@@ -94,7 +97,10 @@ def build_commands(
     def var(repo: str, name: str, value: str) -> Command:
         return Command(["gh", "variable", "set", name, "--repo", repo, "--body", value])
 
-    commands = []
+    # Merging a branch then deletes it, so "merged" and "deleted" are the same event and
+    # teardown only has to handle deletion (D7). Harmless on the infra repo; set for consistency.
+    repos = [*(f"{owner}/{s.repo}" for s in registry.services), infra_full]
+    commands = [Command(["gh", "repo", "edit", r, "--delete-branch-on-merge"]) for r in repos]
     for service in registry.services:
         repo = f"{owner}/{service.repo}"
         commands += [
@@ -111,6 +117,10 @@ def build_commands(
         var(infra_full, "AWS_DEPLOY_ROLE_ARN", infra_role),
     ]
     return commands
+
+
+def token_help(owner: str, infra_repo: str) -> str:
+    return TOKEN_HELP.format(name=TOKEN_ENV, owner=owner, infra=f"{owner}/{infra_repo}")
 
 
 def run_command(command: Command) -> int:
@@ -162,16 +172,8 @@ def main(
             return fail(f"`{' '.join(command.args[:4])}` failed; is `gh auth login` done?")
 
     if token is None:
-        repos = ", ".join([infra_repo, *(s.repo for s in registry.services)])
         print()
-        print(
-            TOKEN_HELP.format(
-                name=TOKEN_ENV,
-                owner=registry.github_owner,
-                repos=repos,
-                infra=f"{registry.github_owner}/{infra_repo}",
-            )
-        )
+        print(token_help(registry.github_owner, infra_repo))
         return 1
     print("GitHub repos configured." if not args.dry_run else "Dry run: nothing was changed.")
     return 0

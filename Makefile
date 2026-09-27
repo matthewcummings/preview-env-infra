@@ -32,7 +32,7 @@ lint: ## Ruff lint + format check
 synth: node_modules ## cdk synth, no AWS credentials needed
 	npx cdk synth -q
 
-doctor: ## Check tools, AWS credentials, region, CDK bootstrap, GitHub owner
+doctor: ## Check tools, AWS credentials and region, CDK bootstrap, GitHub repos and token
 	uv run python scripts/doctor.py
 
 bootstrap: node_modules ## One-time CDK bootstrap of the account/region

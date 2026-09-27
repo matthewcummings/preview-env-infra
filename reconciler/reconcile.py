@@ -107,6 +107,9 @@ def apply_plan(
     if action is Action.NOOP:
         log(f"Nothing to do for env '{plan.env}'.")
         return action
+    if action is Action.WAIT:
+        log(f"Env '{plan.env}' is waiting for images; nothing deployed yet.")
+        return action
 
     if action in (Action.DESTROY, Action.DELETE_THEN_CREATE):
         deleter.delete(plan.env)

@@ -52,6 +52,9 @@ def test_sets_variables_and_secret(tmp_path, monkeypatch, capsys):
     code, ran = run(tmp_path, monkeypatch, token=TOKEN, dry_run=False)
     assert code == 0
     assert [c.args for c in ran if c.stdin is None] == [
+        ["gh", "repo", "edit", "octo/service-a", "--delete-branch-on-merge"],
+        ["gh", "repo", "edit", "octo/service-b", "--delete-branch-on-merge"],
+        ["gh", "repo", "edit", "octo/preview-env-infra", "--delete-branch-on-merge"],
         var("AWS_REGION", "octo/service-a", "us-east-1"),
         var("AWS_ROLE_ARN", "octo/service-a", "arn:aws:iam::1:role/a"),
         var("INFRA_REPO", "octo/service-a", "octo/preview-env-infra"),
@@ -77,6 +80,8 @@ def test_dry_run_runs_nothing(tmp_path, monkeypatch, capsys):
     assert code == 0
     assert ran == []
     assert "(dry run) $ gh secret set INFRA_DISPATCH_TOKEN --repo octo/service-a" in out
+    for repo in ("service-a", "service-b", "preview-env-infra"):
+        assert f"(dry run) $ gh repo edit octo/{repo} --delete-branch-on-merge" in out
     assert TOKEN not in out
 
 
@@ -84,9 +89,14 @@ def test_missing_token_explains_how_to_create_it(tmp_path, monkeypatch, capsys):
     code, ran = run(tmp_path, monkeypatch, token=None, dry_run=False)
     out = capsys.readouterr().out
     assert code == 1
-    assert len(ran) == 8  # variables still set
+    assert len(ran) == 11  # auto-delete and variables still set
     assert "personal-access-tokens/new" in out
-    assert "Contents: Read and write" in out
+    # Least privilege: only the infra repo, only Contents read/write, short expiry.
+    assert 'Repository access: "Only select repositories": ONLY octo/preview-env-infra' in out
+    assert "Contents: Read and write (needed to send repository_dispatch)" in out
+    assert "Expiration: 30 days" in out
+    assert "infra workflow's own GITHUB_TOKEN" in out
+    assert "service-a" not in out.split("personal-access-tokens/new", 1)[1]
 
 
 def test_gh_failure_stops(tmp_path, monkeypatch, capsys):

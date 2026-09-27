@@ -80,6 +80,8 @@ def render_text(plan: Plan) -> str:
                 lines.append(f"  {' ' * width}    image {svc.image}")
         for error in plan.resolved.errors:
             lines.append(f"  ERROR: {error}")
+        for wait in plan.resolved.waiting:
+            lines.append(f"  WAITING: {wait}")
         lines.append("")
 
     if plan.decision is not None and plan.decision.action is Action.BLOCKED:
@@ -123,7 +125,9 @@ def render_markdown(plan: Plan) -> str:
         lines.append("")
         for error in plan.resolved.errors:
             lines.append(f"**ERROR:** {error}")
-        if plan.resolved.errors:
+        for wait in plan.resolved.waiting:
+            lines.append(f"**Waiting:** {wait}")
+        if plan.resolved.errors or plan.resolved.waiting:
             lines.append("")
 
     if plan.decision is not None and plan.decision.action is Action.BLOCKED:

@@ -4,8 +4,10 @@ Also `teardown --group X`: an operator command that deletes a preview env's stac
 branches still exist (e.g. a missed delete event, D21/D29). The reconciler itself only
 tears down when no branches remain (D26).
 
-Exit codes: 0 = done (including ignored branches and no-ops), 1 = refused or failed
-(conflict, missing images, blocked stack, deploy error, bad config), 2 = bad usage.
+Exit codes:
+  0 = done, including ignored branches, no-ops, and waiting for images still being built
+  1 = refused or failed (conflict, blocked stack, deploy error, bad config)
+  2 = bad usage
 """
 
 import argparse
@@ -234,7 +236,8 @@ class _Outputs:
     """Writes `env=` and `action=` to the GitHub step outputs file, if one was given.
 
     Values: env = the env name ("" for an ignored branch); action = create, update,
-    destroy, noop, delete-then-create, refused (conflict/errors/blocked), unknown
+    destroy, noop, delete-then-create, wait (images not built yet), refused
+    (conflict/errors/blocked), unknown
     (--no-aws), ignored, or error (the run failed before or during apply). The first
     write wins, so a failure during apply still reports the planned action.
     """

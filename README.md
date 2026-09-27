@@ -119,29 +119,74 @@ Supported: macOS, Linux, or Windows via WSL2.
 | [uv](https://docs.astral.sh/uv/) | 0.12+ | Python 3.14 and all Python dependencies |
 | Node.js | 24 | Runs the pinned CDK CLI (`npx cdk`) |
 | AWS CLI | v2 | Credentials and region |
-| [GitHub CLI](https://cli.github.com/) (`gh`) | 2+, logged in | Optional: `make setup-github` uses it to set your repos' GitHub Actions variables. Without it, set them by hand in each repo's settings. |
+| [GitHub CLI](https://cli.github.com/) (`gh`) | 2+, logged in (`gh auth login`) | Configures your repos in step 7 and checks them in step 4 |
 
 **Either way, you also need `make`** (macOS: Xcode Command Line Tools; Ubuntu/WSL: `sudo apt install make`). Docker is only needed to run the service repos' tests, not to deploy: CI builds the images.
 
-### 3. Set up AWS access and your GitHub owner
+### 3. Set up AWS access, your GitHub owner and a GitHub token
 
 - **AWS:** your terminal needs credentials for an IAM identity with admin rights. Only this first-time setup uses them; CI never does. Choose your region **once** in your AWS config (`AWS_REGION` or your profile's `region`; `us-east-1` if unset), and everything else follows it.
 - **GitHub owner:** in your fork of `preview-env-infra`, set `github_owner` in [`services.yaml`](services.yaml) to the owner of your forks: your GitHub organization, or for personal forks, your GitHub username. (Alternatively, set the `PREVIEW_ENV_GITHUB_OWNER` environment variable.)
+- **GitHub token:** the service repos' CI needs a token that lets it signal this repo. Create a fine-grained token at [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new):
+  - **Resource owner:** your GitHub owner. **Expiration:** 30 days.
+  - **Repository access:** "Only select repositories", then only **`preview-env-infra`**.
+  - **Repository permissions:** **Contents: Read and write** (Metadata: read-only is added automatically).
 
-### First-time setup
+  Then `export INFRA_DISPATCH_TOKEN=<the token>` in your terminal. Step 4 checks it, and step 7 stores it in the service repos.
 
-<!-- TODO(matt): verify every step end to end (in progress) and add real timings -->
+### 4. Check your setup
 
-| Step | Command | What it does |
-|---|---|---|
-| 1 | `make doctor` | Read-only checklist: tools, AWS credentials, region, CDK bootstrap, GitHub owner. |
-| 2 | `make bootstrap` | One-time `cdk bootstrap` for your account and region. Harmless to rerun. |
-| 3 | `make deploy-baseline ALLOW_MY_IP=1` | Deploys `preview-baseline`: VPC, NAT gateway, ECS cluster, ECR repos, Aurora, GitHub OIDC roles. **~15-20 minutes** (mostly Aurora). Reuses your account's GitHub OIDC provider if you already have one. Then adds your public IP to the load balancer allowlist. |
-| 4 | Create a fine-grained GitHub token, `export INFRA_DISPATCH_TOKEN=...`, then `make setup-github` | Sets the GitHub Actions variables on all three repos from `preview-baseline`'s outputs, and the dispatch secret on the service repos. Run without the token first: it prints exactly which token to create. `DRY_RUN=1` shows the `gh` commands only. |
-| 5 | Push to `main` in each service repo (or re-run its CI) | Builds the first images. The infra repo then deploys the `main` environment automatically. `make deploy-main` does the same from your laptop. |
-| 6 | In service-a: `git switch -c preview/demo/hello && git push -u origin HEAD` | Creates your first preview. Watch this repo's **Actions** tab: the reconcile run prints the plan and the environment URL. |
+```bash
+make doctor
+```
 
-Also recommended: enable **"Automatically delete head branches"** in each service repo's settings, so merging a PR deletes its branch and tears the preview down.
+A read-only checklist: tools, AWS credentials and region, CDK bootstrap, your GitHub repos and their settings, and whether your token can signal this repo. On a fresh setup, expect warnings for the things later steps do (no CDK bootstrap yet, GitHub not configured yet). Anything marked FAIL needs fixing first. Rerun it any time.
+
+### 5. Bootstrap CDK (once per account and region)
+
+```bash
+make bootstrap
+```
+
+Creates the standard resources CDK needs to deploy (an S3 bucket, an ECR repo, IAM roles). Harmless to rerun.
+
+### 6. Deploy the baseline (~15-20 minutes)
+
+```bash
+make deploy-baseline ALLOW_MY_IP=1
+```
+
+Creates the `preview-baseline` stack: the VPC and NAT gateway, the ECS cluster, one ECR repository per service, the Aurora cluster, and the GitHub OIDC roles CI uses. Most of the time is Aurora. It reuses your account's GitHub OIDC provider if you already have one. `ALLOW_MY_IP=1` then adds your public IP to the load balancer allowlist, so you can reach the environments.
+
+### 7. Connect GitHub
+
+```bash
+make setup-github
+```
+
+This sets the GitHub Actions variables on all three repos from `preview-baseline`'s outputs, stores the token as a secret in the two service repos, and turns on **"Automatically delete head branches"** so that merging a PR deletes its branch and tears its preview down. `make setup-github DRY_RUN=1` shows the `gh` commands without running them. Rerun `make doctor` afterwards: the GitHub checks should all pass.
+
+### 8. Build the first images and deploy `main`
+
+Service images are built by CI, so trigger it once in each service repo:
+
+```bash
+cd ../service-a && git commit --allow-empty -m "Build the first image" && git push
+cd ../service-b && git commit --allow-empty -m "Build the first image" && git push
+cd ../preview-env-infra
+```
+
+Each push builds and publishes an image, then signals this repo, which deploys the `main` environment (`preview-env-main`). Watch it in this repo's **Actions** tab. The first run may report "waiting for images" until both services have built; the run after the second build deploys and ends with a smoke test. (`make deploy-main` does the same deploy from your laptop.)
+
+### 9. Create your first preview
+
+```bash
+cd ../service-a && git switch -c preview/demo/hello && git push -u origin HEAD
+```
+
+This creates the `demo` preview environment: service-a on your branch, service-b on `main`. The reconcile run in this repo's **Actions** tab prints the plan, deploys `preview-env-demo`, smoke-tests it, and shows its URL. Push a `preview/demo/...` branch in service-b too, and the same environment picks it up. Delete the branches, and the environment goes away.
+
+<!-- TODO(matt): verify every step end to end and add real timings -->
 
 ### Using it
 

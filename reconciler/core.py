@@ -155,10 +155,15 @@ class ResolvedEnv:
     services: tuple[ResolvedService, ...]
     images_checked: bool
     errors: tuple[str, ...] = field(default=())
+    # Services with no image yet at all (e.g. first-time setup, before their first CI build).
+    # Not an error: the env deploys once the builds land and signal again (D24).
+    waiting: tuple[str, ...] = field(default=())
 
     def to_env_spec(self) -> EnvSpec:
         if self.errors:
             raise ValueError(f"env '{self.env}' has unresolved services: {list(self.errors)}")
+        if self.waiting:
+            raise ValueError(f"env '{self.env}' is waiting for images: {list(self.waiting)}")
         if not self.images_checked:
             raise ValueError("images were not checked (--no-aws); cannot build an EnvSpec")
         return EnvSpec(
@@ -193,6 +198,7 @@ def resolve_images(
     """
     resolved: list[ResolvedService] = []
     errors: list[str] = []
+    waiting: list[str] = []
 
     for service, source in plan.services.items():
         match source:
@@ -205,10 +211,13 @@ def resolve_images(
                     resolved.append(ResolvedService(service, source, branch, sha, image))
                     continue
                 main = _newest_main_build(service, main_commits.get(service, ()), image_for)
-                if isinstance(main, str):
-                    errors.append(
-                        f"{service}: no image for {branch} @ {short(sha)} yet, and {main}"
+                if isinstance(main, NoImage):
+                    waiting.append(
+                        f"{service}: no image for {branch} @ {short(sha)} yet, and {main.reason}"
                     )
+                    continue
+                if isinstance(main, str):
+                    errors.append(f"{service}: {main}")
                     continue
                 main_sha, main_image, main_note = main
                 note = (
@@ -222,6 +231,9 @@ def resolve_images(
                 )
             case UseMain():
                 main = _newest_main_build(service, main_commits.get(service, ()), image_for)
+                if isinstance(main, NoImage):
+                    waiting.append(f"{service}: {main.reason}")
+                    continue
                 if isinstance(main, str):
                     errors.append(f"{service}: {main}")
                     continue
@@ -230,13 +242,23 @@ def resolve_images(
                     ResolvedService(service, None, MAIN_BRANCH, main_sha, main_image, main_note)
                 )
 
-    return ResolvedEnv(plan.env, tuple(resolved), image_for is not None, tuple(errors))
+    return ResolvedEnv(
+        plan.env, tuple(resolved), image_for is not None, tuple(errors), tuple(waiting)
+    )
+
+
+@dataclass(frozen=True)
+class NoImage:
+    """No image exists yet for the commits we looked at: wait for CI, don't fail."""
+
+    reason: str
 
 
 def _newest_main_build(
     service: str, commits: Sequence[str], image_for: ImageLookup | None
-) -> tuple[str, str | None, str | None] | str:
-    """(sha, image, note) for the newest main commit with an image, or an error message."""
+) -> tuple[str, str | None, str | None] | NoImage | str:
+    """(sha, image, note) for the newest main commit with an image; NoImage if none of them
+    has one yet; or an error message."""
     if not commits:
         return "no commits found on main"
     if image_for is None:
@@ -251,7 +273,7 @@ def _newest_main_build(
                     f"using {short(sha)}, the newest main with an image"
                 )
             return sha, image, note
-    return f"none of the last {len(commits)} main commits has an image"
+    return NoImage(f"no image built yet for any of the last {len(commits)} main commits")
 
 
 # --- 3. Desired vs actual -------------------------------------------------------------
@@ -264,6 +286,7 @@ class Action(StrEnum):
     NOOP = "noop"
     DELETE_THEN_CREATE = "delete-then-create"
     BLOCKED = "blocked"
+    WAIT = "wait"
 
 
 # A failed first create leaves the stack in ROLLBACK_COMPLETE: it holds nothing and can
@@ -358,6 +381,11 @@ def make_plan(
     decision = None
     if stacks_checked and not isinstance(desired, Conflict):
         decision = decide_action(desired, stack_status)
+        if resolved is not None and resolved.waiting and decision.action is not Action.BLOCKED:
+            decision = Decision(
+                Action.WAIT,
+                "waiting for images to be built; the env deploys when those builds finish",
+            )
     return Plan(
         env=desired.env,
         trigger=trigger,

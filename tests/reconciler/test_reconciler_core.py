@@ -26,6 +26,7 @@ from reconciler.core import (
     make_plan,
     resolve_images,
 )
+from reconciler.render import render_text
 from reconciler.spec import ServiceSpec
 
 MAIN_COMMITS = {"service-a": [A_MAIN], "service-b": [B_MAIN]}
@@ -207,19 +208,37 @@ def test_main_uses_newest_commit_that_has_an_image():
     assert "newest main a0a0a0a not built yet; using a1a1a1a" in a.note
 
 
-def test_no_image_anywhere_is_an_error():
+def test_no_image_anywhere_means_waiting_not_an_error():
+    """First-time setup: service-a's CI hasn't built anything yet. Wait, don't fail."""
     plan = EnvPlan("c", {"service-a": UseBranch("preview/c", A_FEAT), "service-b": UseMain()})
     resolved = resolve_images(
         plan,
         main_commits=MAIN_COMMITS,
         image_for=lambda s, sha: image(s, sha) if s == "service-b" else None,
     )
-    assert resolved.errors == (
+    assert resolved.errors == ()
+    assert resolved.waiting == (
         "service-a: no image for preview/c @ af1af1a yet, "
-        "and none of the last 1 main commits has an image",
+        "and no image built yet for any of the last 1 main commits",
     )
     with pytest.raises(ValueError):
         resolved.to_env_spec()
+
+
+def test_waiting_for_images_plans_a_wait_that_is_ok():
+    plan = make_plan(
+        trigger="env main",
+        desired=main_env(REGISTRY),
+        main_commits=MAIN_COMMITS,
+        image_for=lambda s, sha: image(s, sha) if s == "service-a" else None,
+        stack_status=None,
+        stacks_checked=True,
+    )
+    assert plan.ok
+    assert plan.decision is not None and plan.decision.action is Action.WAIT
+    text = render_text(plan)
+    assert "WAITING: service-b: no image built yet" in text
+    assert "Action: wait" in text
 
 
 def test_no_aws_resolves_shas_only():
